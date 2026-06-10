@@ -25,8 +25,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="min-h-screen flex flex-col bg-slate-100 text-slate-900 antialiased">
 
         {/* ── Top navigation ─────────────────────────────────────────────── */}
-        <header className="sticky top-0 z-50 bg-white/90 backdrop-blur-md border-b border-slate-200 shadow-sm">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
+        <header className="sticky top-0 z-50 liquid-nav border-b border-slate-200/70 shadow-lg">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 sm:py-0 h-auto sm:h-16 flex flex-col sm:flex-row items-center justify-between gap-3 relative">
 
             {/* Brand */}
             <Link href="/" className="flex items-center gap-2.5 font-bold text-slate-900 hover:opacity-80 transition-opacity shrink-0">
@@ -47,19 +47,19 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </div>
 
             {/* Nav links */}
-            <nav className="flex items-center gap-0.5">
+            <nav className="flex items-center gap-0.5 overflow-x-auto pb-1 no-scrollbar">
               {NAV_LINKS.slice(1).map((link) => (
                 <Link
                   key={link.href}
                   href={link.href}
-                  className="text-xs sm:text-sm font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 px-2 sm:px-3 py-2 rounded-lg transition-colors"
+                  className="liquid-nav-link whitespace-nowrap"
                 >
                   {link.label}
                 </Link>
               ))}
               <Link
                 href="/upload"
-                className="ml-2 text-xs sm:text-sm font-bold bg-indigo-600 text-white px-3 sm:px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors shadow-sm"
+                className="ml-2 liquid-nav-cta whitespace-nowrap"
               >
                 Start →
               </Link>
