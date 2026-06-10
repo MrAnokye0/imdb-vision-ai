@@ -113,7 +113,7 @@ export async function extractFromImages(
     .join("\n\n");
 
   const preprocessedUrls = perImage.map((p) => p.processed ?? p.url);
-  upd("vision", "running", "🧠 Sending images and OCR text to Gemini Vision...");
+  upd("vision", "running", "🧠 Sending images and OCR text to extraction backend...");
   const visionData = await runVisionExtraction(preprocessedUrls, imageText);
   const visionFields = Object.values(visionData).filter((v) => typeof v === "string" && String(v).trim()).length;
   if (visionFields > 0) {

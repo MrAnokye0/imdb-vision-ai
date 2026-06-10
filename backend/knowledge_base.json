@@ -1,0 +1,370 @@
+{
+  "Milo": {
+    "manufacturer": "Nestlé",
+    "category": "Beverages",
+    "segment": "Chocolate Malt Drink",
+    "common_sizes": ["400g", "500g", "1kg"],
+    "common_packaging": ["Tin", "Box"],
+    "country_origin": "Malaysia"
+  },
+  "Coca-Cola": {
+    "manufacturer": "The Coca-Cola Company",
+    "category": "Beverages",
+    "segment": "Carbonated Soft Drink",
+    "common_sizes": ["330ml", "500ml", "1.5L", "2L"],
+    "common_packaging": ["Can", "Bottle"],
+    "country_origin": "United States"
+  },
+  "Pepsi": {
+    "manufacturer": "PepsiCo",
+    "category": "Beverages",
+    "segment": "Carbonated Soft Drink",
+    "common_sizes": ["330ml", "500ml", "1.5L", "2L"],
+    "common_packaging": ["Can", "Bottle"],
+    "country_origin": "United States"
+  },
+  "Sprite": {
+    "manufacturer": "The Coca-Cola Company",
+    "category": "Beverages",
+    "segment": "Carbonated Soft Drink",
+    "common_sizes": ["330ml", "500ml", "1.5L", "2L"],
+    "common_packaging": ["Can", "Bottle"],
+    "country_origin": "United States"
+  },
+  "Fanta": {
+    "manufacturer": "The Coca-Cola Company",
+    "category": "Beverages",
+    "segment": "Carbonated Soft Drink",
+    "common_sizes": ["330ml", "500ml"],
+    "common_packaging": ["Can", "Bottle"],
+    "country_origin": "United States"
+  },
+  "Lay's": {
+    "manufacturer": "PepsiCo",
+    "category": "Snacks",
+    "segment": "Potato Chips",
+    "common_sizes": ["40g", "60g", "100g"],
+    "common_packaging": ["Bag", "Sachet"],
+    "country_origin": "United States"
+  },
+  "Doritos": {
+    "manufacturer": "PepsiCo",
+    "category": "Snacks",
+    "segment": "Potato Chips",
+    "common_sizes": ["40g", "50g", "100g"],
+    "common_packaging": ["Bag", "Sachet"],
+    "country_origin": "United States"
+  },
+  "Cadbury": {
+    "manufacturer": "Mondelēz International",
+    "category": "Confectionery",
+    "segment": "Chocolate Confectionery",
+    "common_sizes": ["40g", "50g", "100g"],
+    "common_packaging": ["Wrapper", "Box"],
+    "country_origin": "United Kingdom"
+  },
+  "Nestlé": {
+    "manufacturer": "Nestlé S.A.",
+    "category": "Confectionery",
+    "segment": "Chocolate Confectionery",
+    "common_sizes": ["35g", "50g", "100g"],
+    "common_packaging": ["Wrapper", "Box"],
+    "country_origin": "Switzerland"
+  },
+  "Heinz": {
+    "manufacturer": "Kraft Heinz",
+    "category": "Grocery",
+    "segment": "Condiments",
+    "common_sizes": ["300g", "397g", "500g"],
+    "common_packaging": ["Bottle", "Can", "Jar"],
+    "country_origin": "United States"
+  },
+  "Colgate": {
+    "manufacturer": "Colgate-Palmolive",
+    "category": "Oral Care",
+    "segment": "Toothpaste",
+    "common_sizes": ["75ml", "100ml", "150ml"],
+    "common_packaging": ["Tube"],
+    "country_origin": "United States"
+  },
+  "Sensodyne": {
+    "manufacturer": "Haleon",
+    "category": "Oral Care",
+    "segment": "Toothpaste",
+    "common_sizes": ["50ml", "75ml", "100ml"],
+    "common_packaging": ["Tube"],
+    "country_origin": "United Kingdom"
+  },
+  "Dove": {
+    "manufacturer": "Unilever",
+    "category": "Personal Care",
+    "segment": "Body Wash",
+    "common_sizes": ["100ml", "250ml", "500ml"],
+    "common_packaging": ["Bottle"],
+    "country_origin": "Netherlands"
+  },
+  "Head & Shoulders": {
+    "manufacturer": "Procter & Gamble",
+    "category": "Personal Care",
+    "segment": "Shampoo",
+    "common_sizes": ["100ml", "250ml", "400ml"],
+    "common_packaging": ["Bottle"],
+    "country_origin": "United States"
+  },
+  "Sunsilk": {
+    "manufacturer": "Unilever",
+    "category": "Personal Care",
+    "segment": "Shampoo",
+    "common_sizes": ["75ml", "100ml", "170ml", "350ml"],
+    "common_packaging": ["Bottle"],
+    "country_origin": "Netherlands"
+  },
+  "Ariel": {
+    "manufacturer": "Procter & Gamble",
+    "category": "Household",
+    "segment": "Laundry Detergent",
+    "common_sizes": ["500ml", "1L", "2L"],
+    "common_packaging": ["Bottle", "Pouch"],
+    "country_origin": "United States"
+  },
+  "Omo": {
+    "manufacturer": "Unilever",
+    "category": "Household",
+    "segment": "Laundry Detergent",
+    "common_sizes": ["500ml", "1L", "2L"],
+    "common_packaging": ["Bottle", "Pouch"],
+    "country_origin": "Netherlands"
+  },
+  "Clorox": {
+    "manufacturer": "Clorox",
+    "category": "Household",
+    "segment": "Bleach",
+    "common_sizes": ["500ml", "1L", "2L"],
+    "common_packaging": ["Bottle"],
+    "country_origin": "United States"
+  },
+  "Milk": {
+    "manufacturer": "Various",
+    "category": "Dairy",
+    "segment": "Milk-Based",
+    "common_sizes": ["500ml", "1L", "2L"],
+    "common_packaging": ["Bottle", "Carton"],
+    "country_origin": "Various"
+  },
+  "Horlicks": {
+    "manufacturer": "Haleon",
+    "category": "Beverages",
+    "segment": "Chocolate Malt Drink",
+    "common_sizes": ["400g", "500g"],
+    "common_packaging": ["Tin", "Box"],
+    "country_origin": "India"
+  },
+  "Ovomaltine": {
+    "manufacturer": "Wander",
+    "category": "Beverages",
+    "segment": "Chocolate Malt Drink",
+    "common_sizes": ["400g", "500g"],
+    "common_packaging": ["Tin", "Jar"],
+    "country_origin": "Switzerland"
+  },
+  "Nescafé": {
+    "manufacturer": "Nestlé",
+    "category": "Beverages",
+    "segment": "Coffee Beverage",
+    "common_sizes": ["100g", "200g", "500g"],
+    "common_packaging": ["Jar", "Pouch"],
+    "country_origin": "Switzerland"
+  },
+  "Lipton": {
+    "manufacturer": "Unilever",
+    "category": "Beverages",
+    "segment": "Tea Beverage",
+    "common_sizes": ["25g", "50g", "100g"],
+    "common_packaging": ["Box", "Pouch"],
+    "country_origin": "Netherlands"
+  },
+  "Red Bull": {
+    "manufacturer": "Red Bull GmbH",
+    "category": "Beverages",
+    "segment": "Energy Drink",
+    "common_sizes": ["250ml", "500ml"],
+    "common_packaging": ["Can"],
+    "country_origin": "Austria"
+  },
+  "Gatorade": {
+    "manufacturer": "PepsiCo",
+    "category": "Beverages",
+    "segment": "Sports Drink",
+    "common_sizes": ["500ml", "750ml", "1L"],
+    "common_packaging": ["Bottle"],
+    "country_origin": "United States"
+  },
+  "Orange Juice": {
+    "manufacturer": "Various",
+    "category": "Beverages",
+    "segment": "Juice",
+    "common_sizes": ["200ml", "250ml", "500ml", "1L"],
+    "common_packaging": ["Bottle", "Carton"],
+    "country_origin": "Various"
+  },
+  "Apple Juice": {
+    "manufacturer": "Various",
+    "category": "Beverages",
+    "segment": "Juice",
+    "common_sizes": ["200ml", "250ml", "500ml", "1L"],
+    "common_packaging": ["Bottle", "Carton"],
+    "country_origin": "Various"
+  },
+  "Tropicana": {
+    "manufacturer": "PepsiCo",
+    "category": "Beverages",
+    "segment": "Juice",
+    "common_sizes": ["200ml", "250ml", "500ml", "1L"],
+    "common_packaging": ["Bottle", "Carton"],
+    "country_origin": "United States"
+  },
+  "Panadol": {
+    "manufacturer": "GlaxoSmithKline",
+    "category": "Healthcare",
+    "segment": "Pain Relief",
+    "common_sizes": ["10", "20", "30"],
+    "common_packaging": ["Box", "Blister"],
+    "country_origin": "United Kingdom"
+  },
+  "Aspirin": {
+    "manufacturer": "Various",
+    "category": "Healthcare",
+    "segment": "Pain Relief",
+    "common_sizes": ["10", "20"],
+    "common_packaging": ["Box", "Blister"],
+    "country_origin": "Various"
+  },
+  "Strepsils": {
+    "manufacturer": "Reckitt",
+    "category": "Healthcare",
+    "segment": "Cough & Cold Relief",
+    "common_sizes": ["16", "24"],
+    "common_packaging": ["Box"],
+    "country_origin": "United Kingdom"
+  },
+  "Robitussin": {
+    "manufacturer": "Reckitt",
+    "category": "Healthcare",
+    "segment": "Cough & Cold Relief",
+    "common_sizes": ["100ml", "200ml"],
+    "common_packaging": ["Bottle"],
+    "country_origin": "United Kingdom"
+  },
+  "Vicks": {
+    "manufacturer": "Procter & Gamble",
+    "category": "Healthcare",
+    "segment": "Cough & Cold Relief",
+    "common_sizes": ["30ml", "50ml"],
+    "common_packaging": ["Jar", "Bottle"],
+    "country_origin": "United States"
+  },
+  "Betadine": {
+    "manufacturer": "Mundipharma",
+    "category": "Healthcare",
+    "segment": "Antiseptic",
+    "common_sizes": ["30ml", "100ml"],
+    "common_packaging": ["Bottle"],
+    "country_origin": "Austria"
+  },
+  "Savlon": {
+    "manufacturer": "ITC",
+    "category": "Healthcare",
+    "segment": "Antiseptic",
+    "common_sizes": ["30ml", "100ml"],
+    "common_packaging": ["Bottle"],
+    "country_origin": "India"
+  },
+  "Dettol": {
+    "manufacturer": "Reckitt",
+    "category": "Household",
+    "segment": "Disinfectant",
+    "common_sizes": ["100ml", "500ml", "1L"],
+    "common_packaging": ["Bottle"],
+    "country_origin": "United Kingdom"
+  },
+  "Listerine": {
+    "manufacturer": "Johnson & Johnson",
+    "category": "Oral Care",
+    "segment": "Mouth Wash",
+    "common_sizes": ["250ml", "500ml"],
+    "common_packaging": ["Bottle"],
+    "country_origin": "United States"
+  },
+  "Chlorhexidine": {
+    "manufacturer": "Various",
+    "category": "Oral Care",
+    "segment": "Mouth Wash",
+    "common_sizes": ["100ml", "200ml"],
+    "common_packaging": ["Bottle"],
+    "country_origin": "Various"
+  },
+  "Marigold": {
+    "manufacturer": "Unilever",
+    "category": "Household",
+    "segment": "Dishwash",
+    "common_sizes": ["200ml", "400ml"],
+    "common_packaging": ["Bottle"],
+    "country_origin": "Netherlands"
+  },
+  "Sunlight": {
+    "manufacturer": "Unilever",
+    "category": "Household",
+    "segment": "Dishwash",
+    "common_sizes": ["200ml", "400ml"],
+    "common_packaging": ["Bottle"],
+    "country_origin": "Netherlands"
+  },
+  "Vim": {
+    "manufacturer": "Unilever",
+    "category": "Household",
+    "segment": "Cleaner",
+    "common_sizes": ["150ml", "200ml"],
+    "common_packaging": ["Bottle"],
+    "country_origin": "Netherlands"
+  },
+  "Ponds": {
+    "manufacturer": "Unilever",
+    "category": "Personal Care",
+    "segment": "Skincare",
+    "common_sizes": ["100ml", "200ml"],
+    "common_packaging": ["Jar", "Tube"],
+    "country_origin": "Netherlands"
+  },
+  "Fair & Lovely": {
+    "manufacturer": "Unilever",
+    "category": "Personal Care",
+    "segment": "Skincare",
+    "common_sizes": ["50ml", "100ml"],
+    "common_packaging": ["Tube"],
+    "country_origin": "Netherlands"
+  },
+  "Vaseline": {
+    "manufacturer": "Unilever",
+    "category": "Personal Care",
+    "segment": "Skincare",
+    "common_sizes": ["50ml", "100ml", "250ml"],
+    "common_packaging": ["Jar", "Tube"],
+    "country_origin": "United States"
+  },
+  "Lux": {
+    "manufacturer": "Unilever",
+    "category": "Personal Care",
+    "segment": "Soap",
+    "common_sizes": ["100g", "125g"],
+    "common_packaging": ["Wrapper"],
+    "country_origin": "Netherlands"
+  },
+  "Dyna": {
+    "manufacturer": "Unilever",
+    "category": "Personal Care",
+    "segment": "Soap",
+    "common_sizes": ["90g", "100g"],
+    "common_packaging": ["Wrapper"],
+    "country_origin": "Netherlands"
+  }
+}
