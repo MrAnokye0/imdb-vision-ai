@@ -52,23 +52,28 @@ body {
 }
 
 .liquid-nav::before {
-  position: sticky;
-  top: 0;
-  z-index: 50;
-  overflow: hidden;
-  background: rgba(255,255,255,0.72);
-  backdrop-filter: blur(18px);
-}
-
-.liquid-nav::before {
   content: "";
   position: absolute;
   inset: 0;
+  z-index: -1;
   background-image:
-    radial-gradient(circle at 15% 35%, rgba(99,102,241,0.18), transparent 24%),
-    radial-gradient(circle at 85% 20%, rgba(168,85,247,0.16), transparent 18%),
-    radial-gradient(circle at 50% 110%, rgba(59,130,246,0.08), transparent 35%);
+    radial-gradient(circle at 15% 35%, rgba(99,102,241,0.22), transparent 18%),
+    radial-gradient(circle at 82% 22%, rgba(168,85,247,0.18), transparent 18%),
+    radial-gradient(circle at 50% 110%, rgba(59,130,246,0.10), transparent 30%);
+  backdrop-filter: blur(20px);
   opacity: 1;
+  pointer-events: none;
+}
+
+.liquid-nav::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -28px;
+  width: 210%;
+  height: 96px;
+  transform: translateX(-50%);
+  background: radial-gradient(circle at 50% 0%, rgba(99,102,241,0.14), transparent 40%);
   pointer-events: none;
 }
 
