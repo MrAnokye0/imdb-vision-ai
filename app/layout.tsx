@@ -26,7 +26,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 
         {/* ── Top navigation ─────────────────────────────────────────────── */}
         <header className="sticky top-0 z-50 liquid-nav border-b border-slate-200/70 shadow-lg">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 sm:py-0 h-auto sm:h-16 flex flex-col sm:flex-row items-center justify-between gap-3 relative">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 sm:py-0 h-auto flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between relative">
 
             {/* Brand */}
             <Link href="/" className="flex items-center gap-2.5 font-bold text-slate-900 hover:opacity-80 transition-opacity shrink-0">
@@ -47,7 +47,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </div>
 
             {/* Nav links */}
-            <nav className="flex items-center gap-0.5 overflow-x-auto pb-1 no-scrollbar">
+            <nav className="flex flex-wrap items-center justify-center gap-2 overflow-x-auto pb-1 no-scrollbar w-full sm:w-auto">
               {NAV_LINKS.slice(1).map((link) => (
                 <Link
                   key={link.href}

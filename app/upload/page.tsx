@@ -38,7 +38,7 @@ export default function UploadPage() {
       </div>
 
       {/* Pipeline steps */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         {PIPELINE.map((s) => (
           <div key={s.step} className="bg-white border border-slate-200 rounded-xl p-3 flex items-start gap-3 hover:border-indigo-300 hover:shadow-sm transition-all group">
             <div className="w-8 h-8 bg-indigo-50 group-hover:bg-indigo-100 rounded-lg flex items-center justify-center text-base shrink-0 transition-colors">
@@ -53,7 +53,7 @@ export default function UploadPage() {
       </div>
 
       {/* IMDB column chips */}
-      <div className="flex flex-wrap gap-1.5">
+      <div className="flex flex-wrap gap-2">
         {COLUMNS.map((col, i) => (
           <span key={col} className="inline-flex items-center gap-1.5 bg-indigo-50 border border-indigo-100 text-indigo-700 text-xs font-semibold px-2.5 py-1 rounded-full">
             <span className="w-4 h-4 bg-indigo-600 text-white text-[9px] font-black rounded-full flex items-center justify-center shrink-0">{i + 1}</span>

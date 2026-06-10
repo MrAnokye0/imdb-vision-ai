@@ -220,7 +220,7 @@ function DuplicateModal({
         <div className="border-t border-slate-200 bg-slate-50 px-6 py-4 space-y-3 shrink-0">
           <p className="text-sm text-slate-600 font-medium text-center">What would you like to do?</p>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <button onClick={() => onRemove(cur.rowId)}
               className="flex flex-col items-center gap-1 bg-red-50 hover:bg-red-100 border border-red-200 text-red-700 font-semibold text-sm px-4 py-3 rounded-xl transition-colors">
               <span className="text-xl">🗑</span>
@@ -236,8 +236,8 @@ function DuplicateModal({
           </div>
 
           {alerts.length > 1 && (
-            <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-200">
-              <button onClick={onRemoveAll} className="text-xs font-semibold text-red-600 hover:bg-red-50 py-2 rounded-lg transition-colors">
+            <div className="grid grid-cols-1 gap-3 pt-2 border-t border-slate-200 sm:grid-cols-2">
+              <button onClick={onRemoveAll} className="text-xs font-semibold text-red-600 hover:bg-red-50 py-2 rounded-lg transition-colors text-left sm:text-left">
                 Remove All {alerts.length}
               </button>
               <button onClick={onKeepAll} className="text-xs font-semibold text-indigo-600 hover:bg-indigo-50 py-2 rounded-lg transition-colors">
@@ -596,7 +596,7 @@ export default function UploadZone() {
                   {(() => {
                     const currentScanUrl = scanUrls[currentScanStep.key] ?? "";
                     return currentScanUrl ? (
-                      <div className="mt-4 grid grid-cols-2 gap-3">
+                      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
                         <div className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white h-40">
                           <Image src={currentScanUrl} alt={currentScanStep.title} fill sizes="360px" className="object-contain" />
                         </div>
@@ -853,7 +853,7 @@ export default function UploadZone() {
 
                   {/* IMDB fields grid */}
                   {row.status !== "processing" && row.status !== "error" && (
-                    <div className="mt-4 grid grid-cols-2 sm:grid-cols-5 gap-x-4 gap-y-3">
+                    <div className="mt-4 grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5">
                       {IMDB_FIELDS.map((f) => {
                         const val = (row.product[f.key] as string) ?? "";
                         const fieldConf = row.validation?.fields.find((vf) => vf.field === f.key);

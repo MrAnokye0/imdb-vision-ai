@@ -28,9 +28,9 @@ export default function Home() {
 
       {/* ── Hero ──────────────────────────────────────────────────────────────── */}
       <section className="bg-gradient-to-b from-slate-50 to-white border-b border-slate-100">
-        <div className="max-w-4xl mx-auto px-6 py-24 text-center space-y-8">
+        <div className="max-w-4xl mx-auto px-6 py-20 sm:py-24 text-center space-y-8">
 
-          <h1 className="text-5xl sm:text-6xl font-extrabold text-slate-900 leading-[1.08] tracking-tight">
+          <h1 className="text-4xl sm:text-5xl lg:text-6xl font-extrabold text-slate-900 leading-tight tracking-tight">
             AI-Driven IMDB<br />
             <span className="text-indigo-600">Auto-Fill</span>
           </h1>
@@ -41,16 +41,16 @@ export default function Home() {
             Review, edit, then export a database-ready file in seconds.
           </p>
 
-          <div className="flex gap-3 justify-center flex-wrap">
+          <div className="flex flex-col items-center gap-3 justify-center sm:flex-row sm:flex-wrap">
             <Link
               href="/upload"
-              className="inline-flex items-center gap-2 bg-indigo-600 text-white font-bold px-8 py-4 rounded-xl text-base hover:bg-indigo-700 active:scale-95 transition-all shadow-lg shadow-indigo-200"
+              className="inline-flex items-center gap-2 bg-indigo-600 text-white font-bold px-6 py-4 rounded-xl text-base hover:bg-indigo-700 active:scale-95 transition-all shadow-lg shadow-indigo-200"
             >
               Start Extraction →
             </Link>
             <Link
               href="/dashboard"
-              className="inline-flex items-center gap-2 bg-white text-slate-700 font-semibold px-8 py-4 rounded-xl text-base border border-slate-300 hover:border-slate-400 hover:bg-slate-50 transition-all"
+              className="inline-flex items-center gap-2 bg-white text-slate-700 font-semibold px-6 py-4 rounded-xl text-base border border-slate-300 hover:border-slate-400 hover:bg-slate-50 transition-all"
             >
               View Dashboard
             </Link>
@@ -77,7 +77,7 @@ export default function Home() {
           <p className="text-slate-500">Four steps from image to database-ready export</p>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-4 gap-5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
           {STEPS.map((s, i) => (
             <div key={s.n} className="relative bg-white border border-slate-200 rounded-2xl p-6 space-y-4 hover:border-indigo-300 hover:shadow-md transition-all group">
               {/* Connector line */}
@@ -107,7 +107,7 @@ export default function Home() {
             <p className="text-slate-500">Every attribute extracted, validated, and ready for your database</p>
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
             {COLUMNS.map((col, i) => (
               <div key={col} className="flex items-center gap-3 bg-white border border-slate-200 rounded-xl px-4 py-3 hover:border-indigo-300 hover:shadow-sm transition-all group">
                 <span className="w-6 h-6 rounded-lg bg-indigo-600 text-white text-xs font-black flex items-center justify-center shrink-0 group-hover:bg-indigo-700 transition-colors">
@@ -127,7 +127,7 @@ export default function Home() {
           <p className="text-slate-500">Powerful tools to automate your data extraction workflow</p>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
           {FEATURES.map((f) => (
             <div key={f.title} className="bg-white border border-slate-200 rounded-2xl p-6 space-y-3 hover:border-indigo-300 hover:shadow-md transition-all">
               <span className="w-10 h-10 rounded-xl bg-slate-50 flex items-center justify-center text-xl">{f.icon}</span>
@@ -140,7 +140,7 @@ export default function Home() {
 
       {/* ── CTA ───────────────────────────────────────────────────────────────── */}
       <section className="max-w-5xl mx-auto px-6 pb-20">
-        <div className="bg-indigo-600 rounded-3xl px-10 py-14 text-center text-white space-y-5 relative overflow-hidden">
+        <div className="bg-indigo-600 rounded-3xl px-6 py-12 sm:px-10 sm:py-14 text-center text-white space-y-5 relative overflow-hidden">
           {/* Background glow */}
           <div className="absolute -top-20 -right-20 w-64 h-64 bg-indigo-500 rounded-full opacity-30 blur-3xl" />
           <div className="absolute -bottom-20 -left-20 w-64 h-64 bg-violet-600 rounded-full opacity-30 blur-3xl" />
