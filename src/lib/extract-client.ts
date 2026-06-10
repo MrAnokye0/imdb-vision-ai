@@ -62,11 +62,8 @@ export async function extractFromImages(
     barcode?: string;
     ocr?: OCRResult | null;
     parsed?: Partial<ProductRecord>;
-  }> = [];
-
-  for (let i = 0; i < imageUrls.length; i++) {
-    const url = imageUrls[i];
-    upd("preprocess", "running", `🖼 Preprocessing image ${i + 1}/${imageUrls.length}`);
+  }> = await Promise.all(imageUrls.map(async (url, index) => {
+    upd("preprocess", "running", `🖼 Preprocessing image ${index + 1}/${imageUrls.length}`);
     let processed = url;
     try {
       const r = await preprocessImage(url, { maxDim: 1200, contrast: 1.35, brightness: 12, sharpen: true });
@@ -75,33 +72,39 @@ export async function extractFromImages(
       // ignore and continue with original image
     }
 
-    upd("barcode", "running", `📊 Scanning barcode ${i + 1}/${imageUrls.length}`);
-    const bc = await readBarcode(processed).catch(() => "");
+    upd("barcode", "running", `📊 Scanning barcode ${index + 1}/${imageUrls.length}`);
+    upd("ocr", "running", `🔤 Running OCR on image ${index + 1}/${imageUrls.length}`);
 
-    upd("ocr", "running", `🔤 Running OCR on image ${i + 1}/${imageUrls.length}`);
-    let ocrRes: OCRResult | null = null;
-    let parsed: Partial<ProductRecord> | undefined = undefined;
-    try {
-      ocrRes = await runOCRWithLayout(processed);
-      parsed = parseOCRResult(ocrRes);
-    } catch {
-      ocrRes = null;
-      parsed = undefined;
-    }
+    const [bc, ocrResult] = await Promise.all([
+      readBarcode(processed).catch(() => ""),
+      runOCRWithLayout(processed)
+        .then((ocrRes) => ({ ocr: ocrRes, parsed: parseOCRResult(ocrRes) }))
+        .catch(() => ({ ocr: null as OCRResult | null, parsed: undefined })),
+    ]);
 
-    perImage.push({ url, processed, barcode: bc || undefined, ocr: ocrRes, parsed });
-  }
+    return {
+      url,
+      processed,
+      barcode: bc || undefined,
+      ocr: ocrResult.ocr,
+      parsed: ocrResult.parsed,
+    };
+  }));
 
   const barcode = perImage.map((p) => p.barcode).find(Boolean) ?? "";
 
+  const firebasePromise = barcode ? findByBarcode(barcode).catch(() => null) : Promise.resolve(null);
+  const offPromise = barcode ? lookupBarcode(barcode).catch(() => null) : Promise.resolve(null);
+
   upd("firebase", "running", barcode ? `🔥 Checking Firebase for ${barcode}` : "🔥 Skipping Firebase lookup");
-  let apiProduct: Partial<ProductRecord> | null = null;
-  if (barcode) {
-    try { apiProduct = await findByBarcode(barcode); } catch { apiProduct = null; }
-    if (apiProduct) upd("firebase", "done", `Cache hit: ${apiProduct.productName ?? barcode}`);
-    else upd("firebase", "skipped", "No cached record found");
+  upd("off", "running", barcode ? `🌍 Checking Open Food Facts for ${barcode}` : "🌍 Skipping Open Food Facts");
+
+  const [apiProduct, apiOffProduct] = await Promise.all([firebasePromise, offPromise]);
+
+  if (apiProduct) {
+    upd("firebase", "done", `Cache hit: ${apiProduct.productName ?? barcode}`);
   } else {
-    upd("firebase", "skipped", "No barcode available");
+    upd("firebase", "skipped", barcode ? "No cached record found" : "No barcode available");
   }
 
   const imageText = perImage
@@ -117,21 +120,6 @@ export async function extractFromImages(
     upd("vision", "done", `Vision AI extracted ${visionFields} fields`);
   } else {
     upd("vision", "skipped", "Vision AI did not return structured fields");
-  }
-
-  upd("off", "running", barcode ? `🌍 Checking Open Food Facts for ${barcode}` : "🌍 Skipping Open Food Facts");
-  let apiOffProduct: Partial<ProductRecord> | null = null;
-  if (barcode) {
-    try {
-      apiOffProduct = await lookupBarcode(barcode);
-      if (apiOffProduct) {
-        upd("off", "done", `Found Open Food Facts record`);
-      } else {
-        upd("off", "skipped", "Open Food Facts lookup returned no match");
-      }
-    } catch {
-      upd("off", "error", "Open Food Facts lookup failed");
-    }
   }
 
   type ProductField = keyof ProductRecord;

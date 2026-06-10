@@ -711,6 +711,13 @@ export default function UploadZone() {
                   <input type="file" accept="image/*" multiple onChange={handleInput} className="hidden" />
                 </label>
                 <button
+                  type="button"
+                  onClick={startScan}
+                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 px-3 py-2 rounded-lg transition-colors"
+                >
+                  + Add More via Camera
+                </button>
+                <button
                   onClick={() => exportCSV(exportable)}
                   disabled={exportable.length === 0}
                   className="inline-flex items-center gap-1.5 text-xs font-semibold bg-emerald-600 text-white px-3 py-2 rounded-lg hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
