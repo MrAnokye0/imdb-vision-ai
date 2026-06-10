@@ -593,11 +593,13 @@ export default function UploadZone() {
                     </div>
                   </div>
 
-                  {scanUrls[currentScanStep.key] && (
-                    <div className="mt-4 grid grid-cols-2 gap-3">
-                      <div className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white h-40">
-                        <Image src={scanUrls[currentScanStep.key]} alt={currentScanStep.title} fill sizes="360px" className="object-contain" />
-                      </div>
+                  {(() => {
+                    const currentScanUrl = scanUrls[currentScanStep.key] ?? "";
+                    return currentScanUrl ? (
+                      <div className="mt-4 grid grid-cols-2 gap-3">
+                        <div className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white h-40">
+                          <Image src={currentScanUrl} alt={currentScanStep.title} fill sizes="360px" className="object-contain" />
+                        </div>
                       <div className="flex flex-col justify-between gap-3">
                         <div className="rounded-2xl bg-white border border-slate-200 p-3 text-sm text-slate-600">
                           Preview captured image for <strong>{currentScanStep.title}</strong>.
@@ -607,7 +609,8 @@ export default function UploadZone() {
                         </div>
                       </div>
                     </div>
-                  )}
+                  ) : null;
+                })()}
 
                   <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-between sm:items-center">
                     <button
@@ -773,7 +776,7 @@ export default function UploadZone() {
                           {row.status === "duplicate" && (
                             <button
                               onClick={() => setDupeAlerts((p) =>
-                                p.find((a) => a.rowId === row.id) ? p : [...p, { rowId: row.id, fileName: row.fileName, previewUrl: (row.previewUrls ?? [row.previewUrl])[0], product: row.product }]
+                                p.find((a) => a.rowId === row.id) ? p : [...p, { rowId: row.id, fileName: row.fileName, previewUrl: (row.previewUrls ?? [row.previewUrl])[0], product: row.product, duplicates: [] }]
                               )}
                               className="text-xs font-semibold bg-amber-500 text-white px-2.5 py-1.5 rounded-lg hover:bg-amber-600 transition-colors"
                             >

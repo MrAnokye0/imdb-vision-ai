@@ -20,7 +20,7 @@ export default function ProductPreview({ product }: ProductPreviewProps) {
       {(product.imageUrl || product.imageUrls?.[0]) ? (
         <div className="relative h-20 w-20 shrink-0 overflow-hidden rounded-lg bg-zinc-100 dark:bg-zinc-800">
           <Image
-            src={product.imageUrl || product.imageUrls?.[0] ?? ""}
+            src={(product.imageUrl || product.imageUrls?.[0]) ?? ""}
             alt={product.productName}
             fill
             sizes="80px"

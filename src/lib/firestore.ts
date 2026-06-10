@@ -66,9 +66,15 @@ export async function saveProduct(
 
 // ─── Learning system: save corrected version ─────────────────────────────────
 
+export interface CorrectionPayload extends Partial<ProductRecord> {
+  needsReview?: boolean;
+  corrected?: boolean;
+  updatedAt?: unknown;
+}
+
 export async function saveCorrection(
   id: string,
-  corrected: Partial<ProductRecord>
+  corrected: CorrectionPayload
 ): Promise<void> {
   const data = stripUndefined({
     ...corrected,
@@ -208,6 +214,37 @@ export async function getAllProducts(): Promise<SavedProduct[]> {
   } catch {
     return [];
   }
+}
+
+export async function repairUndefinedFieldsInProducts(): Promise<SavedProduct[]> {
+  const products = await getAllProducts();
+  const updated: SavedProduct[] = [];
+
+  for (const product of products) {
+    const data = stripUndefined({
+      barcode:          product.barcode ?? "",
+      categoryType:     product.categoryType ?? "",
+      segmentType:      product.segmentType ?? "",
+      manufacturer:     product.manufacturer ?? "",
+      brand:            product.brand ?? "",
+      productName:      product.productName ?? "",
+      weightUnit:       product.weightUnit ?? "",
+      packagingType:    product.packagingType ?? "",
+      countryOfOrigin:  product.countryOfOrigin ?? "",
+      marketingMessage: product.marketingMessage ?? "",
+      confidenceScore:  product.confidenceScore ?? 0,
+      imageUrl:         product.imageUrl ?? "",
+      source:           product.source ?? "ocr",
+      needsReview:      product.needsReview ?? false,
+      corrected:        product.corrected ?? false,
+      savedAt:          serverTimestamp(),
+    });
+
+    await updateDoc(doc(db, COLLECTION, product.id), data);
+    updated.push(product);
+  }
+
+  return updated;
 }
 
 // ─── Delete ───────────────────────────────────────────────────────────────────

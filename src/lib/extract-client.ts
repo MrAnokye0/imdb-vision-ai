@@ -135,7 +135,7 @@ export async function extractFromImages(
   }
 
   type ProductField = keyof ProductRecord;
-  const FIELDS: ProductField[] = [
+  const FIELDS: Array<keyof VisionExtractionResponse> = [
     "barcode", "brand", "productName", "weightUnit", "categoryType",
     "segmentType", "manufacturer", "countryOfOrigin", "packagingType", "marketingMessage",
   ];
@@ -237,7 +237,7 @@ export async function extractFromImages(
   }
 
   const fieldConfidenceScores: Record<string, number> = {};
-  const merged: Partial<ProductRecord> = {};
+  const merged: Partial<Record<keyof ProductRecord, string>> = {};
 
   for (const key of FIELDS) {
     const list = candidates[key];
