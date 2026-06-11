@@ -1,0 +1,236 @@
+"""
+OCR DEBUGGING GUIDE - FIX GARBLED TEXT
+======================================
+
+The issue: OCR is returning garbled/wrong text instead of product info.
+The solution: Test, preprocess, and validate step-by-step.
+"""
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STEP 1: Test OCR Locally (Fastest Way to Debug)
+# ═══════════════════════════════════════════════════════════════════════════
+
+1. Get a test image:
+   • Take a photo of a product (phone camera)
+   • Save it: C:\Users\LENOVO PC\Downloads\test_product.jpg
+   • OR use an existing product image
+
+2. Run the diagnostic test:
+   cd c:\Users\LENOVO PC\retail-imdb-tool\backend
+   python test_ocr.py "C:\Users\LENOVO PC\Downloads\test_product.jpg"
+
+3. Check the output:
+   ✓ GOOD: OCR extracts brand, product name, weight clearly
+   ✗ BAD: Random characters, unreadable text, empty output
+
+4. Check the preprocessed image:
+   • test_product_preprocessed.jpg will be created
+   • Open it and verify the image is clear (bright, contrasted, sharp)
+   • If preprocessed looks bad → preprocessing needs tuning
+   • If preprocessed looks good but OCR still fails → PaddleOCR issue
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STEP 2: Understand the Problem
+# ═══════════════════════════════════════════════════════════════════════════
+
+SCENARIO A: OCR returns garbled text
+├─ Cause: Image quality, angle, lighting, or language detection
+├─ Fix: Adjust preprocessing (contrast, sharpening, brightness)
+└─ Solution: See STEP 3 (Tune Preprocessing)
+
+SCENARIO B: OCR returns blank/empty
+├─ Cause: PaddleOCR can't detect text regions
+├─ Fix: Image is too small, rotated, or low quality
+└─ Solution: Check image dimensions, try rotating, improve lighting
+
+SCENARIO C: OCR works but fields don't match
+├─ Cause: Extraction engine can't parse the correct text
+├─ Fix: Add keywords/patterns to patterns.py
+└─ Solution: See STEP 4 (Tune Extraction Rules)
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STEP 3: Tune Preprocessing (If Images Are Blurry/Dark/Wrong)
+# ═══════════════════════════════════════════════════════════════════════════
+
+Edit: backend/app.py → preprocess_image() function
+
+Key tuning parameters:
+
+A. Brightness (make text darker/lighter):
+   OLD: image = cv2.convertScaleAbs(image, alpha=1.1, beta=20)
+   TRY: image = cv2.convertScaleAbs(image, alpha=1.2, beta=30)  # Brighter
+   OR:  image = cv2.convertScaleAbs(image, alpha=1.0, beta=10)  # Less bright
+
+B. Sharpening (make text clearer):
+   OLD: kernel = np.array([[-1, -1, -1], [-1, 13, -1], [-1, -1, -1]]) / 1.0
+   TRY: kernel = np.array([[-1, -1, -1], [-1, 15, -1], [-1, -1, -1]]) / 1.0  # Sharper
+   OR:  kernel = np.array([[-1, -1, -1], [-1, 10, -1], [-1, -1, -1]]) / 1.0  # Less sharp
+
+C. Contrast (CLAHE settings):
+   OLD: clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(16, 16))
+   TRY: clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(16, 16))  # More contrast
+   OR:  clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))    # Less contrast
+
+D. Resize (for small text):
+   OLD: max_dim = 1600
+   TRY: max_dim = 2000  # Larger → captures small text better
+   OR:  max_dim = 1200  # Smaller → faster processing
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STEP 4: Tune Extraction Rules (If OCR Works but Fields Wrong)
+# ═══════════════════════════════════════════════════════════════════════════
+
+If OCR extracts text correctly but fields are misidentified:
+
+A. Add missing keywords to patterns.py:
+   
+   Example: If brand "ACME" not recognized
+   • Open: backend/knowledge_base.json
+   • Add entry:
+     "ACME": {
+       "manufacturer": "ACME Corp",
+       "category": "Snacks",
+       "segment": "Chips",
+       "common_sizes": ["50g"],
+       "common_packaging": ["Bag"],
+       "country_origin": "United States"
+     }
+
+B. Add category/segment keywords if missing:
+   
+   Example: If "Chocolate Malt" not detected as Beverages
+   • Open: backend/patterns.py → CATEGORY_KEYWORDS
+   • Add to 'Beverages':
+     'Beverages': [
+       ...existing keywords...,
+       'chocolate malt',  # ADD THIS
+     ]
+
+C. Test again:
+   python test_ocr.py "C:\path\to\image.jpg"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STEP 5: Test Via API (After Local Testing Works)
+# ═══════════════════════════════════════════════════════════════════════════
+
+1. Start the backend:
+   cd backend
+   python app.py
+
+2. In another terminal, test via API:
+   curl -X POST http://localhost:8000/extract \
+     -H "Content-Type: application/json" \
+     -d "{\"ocrText\": \"Milo 400g Chocolate Malt Drink Made in Malaysia\"}"
+
+   Expected response:
+   {
+     "product": {
+       "brand": "Milo",
+       "productName": "Milo 400g Chocolate Malt Drink",
+       "weightUnit": "400g",
+       "categoryType": "Beverages",
+       ...
+     },
+     "field_confidences": {...},
+     "sources": {...}
+   }
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STEP 6: Test End-to-End (Frontend → Backend → Extraction)
+# ═══════════════════════════════════════════════════════════════════════════
+
+1. Make sure backend is running:
+   cd backend
+   python app.py
+   # Should see: "Uvicorn running on http://0.0.0.0:8000"
+
+2. Start the frontend:
+   cd c:\Users\LENOVO PC\retail-imdb-tool
+   npm run dev
+
+3. Open http://localhost:3000/upload
+
+4. Upload a test image
+
+5. Check Results:
+   ✓ Brand extracted correctly?
+   ✓ Product name parsed?
+   ✓ Weight detected?
+   ✓ Category assigned?
+
+6. If extraction is still wrong:
+   • Go back to STEP 3 or STEP 4
+   • Adjust preprocessing or patterns
+   • Test locally with test_ocr.py first
+
+# ═══════════════════════════════════════════════════════════════════════════
+# COMMON ISSUES & QUICK FIXES
+# ═══════════════════════════════════════════════════════════════════════════
+
+Issue: "No text detected"
+→ Fix: Image is blurry or too small
+→ Try: Increase brightness (alpha=1.3, beta=40)
+→ Try: Increase sharpening (kernel center = 15)
+
+Issue: "Random gibberish characters"
+→ Fix: OCR language not set correctly
+→ Status: Already set to 'en' (English) in get_ocr()
+→ Try: Preprocessing too aggressive (reduce CLAHE clipLimit)
+
+Issue: "Only half the text extracted"
+→ Fix: Image is rotated or has angle
+→ Status: Already using use_angle_cls=True
+→ Try: Rotate image manually before uploading
+
+Issue: "Fields not matching knowledge base"
+→ Fix: Brand name spelling different
+→ Try: Add fuzzy matching to knowledge_base lookup (already done)
+→ Try: Add brand to knowledge_base.json with correct spelling
+
+Issue: "Backend crashes when processing image"
+→ Fix: Image format not supported or corrupted
+→ Try: Use .jpg or .png format
+→ Try: Compress image to <5MB
+→ Check logs: python app.py (will show error)
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TESTING CHECKLIST
+# ═══════════════════════════════════════════════════════════════════════════
+
+Before giving up on OCR, verify:
+
+□ Backend is running (python app.py)
+□ Test image is clear (good lighting, focused)
+□ Image format is .jpg or .png
+□ Image is not rotated 90+ degrees
+□ test_ocr.py shows text extraction (even if garbled)
+□ Preprocessed image looks clear and contrasted
+□ All keywords are in patterns.py
+□ All brands are in knowledge_base.json
+□ Frontend can reach backend (check console for errors)
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ADVANCED: If Still Failing
+# ═══════════════════════════════════════════════════════════════════════════
+
+Option 1: Try different image preprocessing
+• Replace current preprocess_image() with simpler version
+• Remove some morphological operations
+• Test with basic CLAHE only
+
+Option 2: Try different OCR language
+• Edit: backend/app.py → get_ocr()
+• Change: lang='en' → lang='ch' (Chinese) or auto-detect
+• May help if product labels have mixed languages
+
+Option 3: Pre-crop image to label area
+• If image has lot of background, OCR struggles
+• Crop to just the label before preprocessing
+• Can do this in frontend or backend
+
+Option 4: Increase image size
+• Very small text (<20px) may not be recognized
+• Try max_dim = 2400 instead of 1600
+• Processing will be slower but more accurate
+
+"""

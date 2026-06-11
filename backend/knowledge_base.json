@@ -7,6 +7,14 @@
     "common_packaging": ["Tin", "Box"],
     "country_origin": "Malaysia"
   },
+  "MOK": {
+    "manufacturer": "Meiji Ghana Limited",
+    "category": "Personal Care",
+    "segment": "Soap",
+    "common_sizes": ["100g"],
+    "common_packaging": ["Box"],
+    "country_origin": "Ghana"
+  },
   "Coca-Cola": {
     "manufacturer": "The Coca-Cola Company",
     "category": "Beverages",

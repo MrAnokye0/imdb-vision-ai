@@ -63,6 +63,34 @@ class KnowledgeBase:
         
         return None
 
+    def lookup_brand_name(self, brand: str) -> Optional[str]:
+        """Return the canonical brand name key for a brand text."""
+        if not brand:
+            return None
+
+        normalized = brand.strip()
+        if normalized in self.brands:
+            return normalized
+
+        brand_lower = normalized.lower()
+        for key in self.brands.keys():
+            if key.lower() == brand_lower:
+                return key
+
+        # Attempt a fuzzy match with noise-tolerant normalization
+        search_key = re.sub(r"[^A-Za-z0-9 ]", "", brand_lower)
+        candidates = [re.sub(r"[^A-Za-z0-9 ]", "", k.lower()) for k in self.brands.keys()]
+        matches = difflib.get_close_matches(search_key, candidates, n=1, cutoff=0.75)
+        if matches:
+            matched_index = candidates.index(matches[0])
+            return list(self.brands.keys())[matched_index]
+
+        matches = difflib.get_close_matches(normalized, self.brands.keys(), n=1, cutoff=0.75)
+        if matches:
+            return matches[0]
+
+        return None
+
 # ─── Extraction Engine ────────────────────────────────────────────────────────
 
 class ExtractionEngine:
@@ -235,9 +263,14 @@ class ExtractionEngine:
         )
         if brand:
             is_valid, normalized, conf = validate_brand(brand)
-            results['brand'] = normalized
-            field_confidences['brand'] = conf
-            source_map['brand'] = "front_label" if front_texts else "text_extraction"
+            if conf >= 0.75:
+                results['brand'] = normalized
+                field_confidences['brand'] = conf
+                source_map['brand'] = "front_label" if front_texts else "text_extraction"
+            else:
+                results['brand'] = ""
+                field_confidences['brand'] = conf
+                source_map['brand'] = "low_confidence"
         else:
             results['brand'] = ""
             field_confidences['brand'] = 0.0
@@ -347,41 +380,61 @@ class ExtractionEngine:
     def _extract_brand(self, ocr_texts: List[str], ocr_blocks: Optional[List[List[dict]]] = None) -> Optional[str]:
         """
         Extract brand name from OCR texts and optional OCR blocks.
-        Strategy: Prefer large front image blocks in the top 30% of the image,
-        excluding marketing, ingredient, and address text.
+        Strategy: Prefer known brands and clean front-label lines.
         """
         if ocr_blocks:
             candidate = self._extract_brand_from_blocks(ocr_blocks)
-            if candidate:
+            if candidate and self._is_likely_brand_line(candidate):
                 return candidate
 
         if not ocr_texts:
             return None
-        
+
+        lines: List[str] = []
         for text in ocr_texts:
             if not text:
                 continue
-            
-            # Split into lines
-            lines = text.split('\n')
-            lines = [l.strip() for l in lines if l.strip()]
-            
-            if not lines:
+            lines.extend([l.strip() for l in text.split('\n') if l.strip()])
+
+        if not lines:
+            return None
+
+        # Prefer a known brand name from the knowledge base if present.
+        for line in lines:
+            brand_name = self._brand_text_matches_known_brand(line)
+            if brand_name:
+                return brand_name
+
+        scored: List[Tuple[int, str]] = []
+        for line in lines:
+            normalized = self._normalize_candidate_line(line)
+            if not self._is_likely_brand_line(normalized):
                 continue
-            
-            candidates = [
-                line for line in lines[:5]
-                if line and (line.isupper() or (line[0].isupper() and len(line) >= 2))
-                and not self._is_brand_reject_text(line)
-            ]
-            
-            if candidates:
-                return candidates[0]
-            
-            for line in lines:
-                if not self._is_brand_reject_text(line):
-                    return line
-        
+
+            score = 0
+            if normalized.isupper():
+                score += 3
+            if normalized[0].isupper():
+                score += 1
+            if len(normalized) <= 20:
+                score += 1
+            if len(re.findall(r'[A-Za-z]', normalized)) >= 2:
+                score += 1
+            if ' ' in normalized:
+                score += 1
+            if re.search(r'\d', normalized):
+                score -= 2
+            if re.search(r'[~^_+=/\\|]', normalized):
+                score -= 4
+            if len(normalized) > 30:
+                score -= 1
+            if score >= 3:
+                scored.append((score, normalized))
+
+        if scored:
+            scored.sort(key=lambda item: (-item[0], len(item[1])))
+            return scored[0][1]
+
         return None
 
     def _extract_brand_from_blocks(self, ocr_blocks_per_image: List[List[dict]]) -> Optional[str]:
@@ -404,6 +457,9 @@ class ExtractionEngine:
             for block in blocks:
                 text = str(block.get('text', '')).strip()
                 if not text or self._is_brand_reject_text(text):
+                    continue
+
+                if not self._is_likely_brand_line(text):
                     continue
 
                 box = block.get('box', [])
@@ -436,6 +492,35 @@ class ExtractionEngine:
             chosen = max(candidates, key=lambda x: x['area'])
 
         return chosen['text'] if chosen else None
+
+    def _normalize_candidate_line(self, line: str) -> str:
+        return re.sub(r'\s+', ' ', line).strip()
+
+    def _brand_text_matches_known_brand(self, line: str) -> Optional[str]:
+        normalized = self._normalize_candidate_line(line)
+        return self.kb.lookup_brand_name(normalized)
+
+    def _is_likely_brand_line(self, line: str) -> bool:
+        if not line:
+            return False
+
+        normalized = self._normalize_candidate_line(line)
+        if len(normalized) < 2 or len(normalized) > 60:
+            return False
+        if self._is_brand_reject_text(normalized):
+            return False
+        if re.fullmatch(r'^[\W_]+$', normalized):
+            return False
+
+        cleaned = re.sub(r"[^A-Za-z0-9 '&\-]", '', normalized)
+        if len(cleaned) / max(1, len(normalized)) < 0.75:
+            return False
+        if re.search(r'[~^_+=/\\|]', normalized):
+            return False
+        if normalized.isdigit():
+            return False
+
+        return True
 
     def _is_brand_reject_text(self, text: str) -> bool:
         text_lower = text.lower()

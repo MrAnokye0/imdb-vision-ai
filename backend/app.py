@@ -5,6 +5,7 @@ Exposes endpoints for OCR, barcode detection, and extraction.
 
 import logging
 import base64
+import re
 from io import BytesIO
 from typing import List, Optional
 from pathlib import Path
@@ -74,7 +75,8 @@ extraction_engine = ExtractionEngine()
 # ─── Request/Response Models ──────────────────────────────────────────────
 
 class ExtractionRequest(BaseModel):
-    images: List[str]  # List of base64-encoded images
+    images: List[str] = []  # List of base64-encoded images
+    ocrText: Optional[str] = None
     image_types: Optional[List[str]] = None  # Optional: front, back, side, barcode
     processing: Optional[dict] = None  # Optional: enable_ocr, enable_barcode, etc.
 
@@ -105,29 +107,53 @@ def base64_to_image(base64_str: str) -> np.ndarray:
         logger.error(f"Failed to decode base64 image: {e}")
         raise ValueError(f"Invalid base64 image: {str(e)}")
 
-def preprocess_image(image: np.ndarray) -> np.ndarray:
-    """Preprocess image for better OCR accuracy."""
-    # Resize to standard size
-    max_dim = 1200
+def preprocess_image(image: np.ndarray, debug: bool = False) -> np.ndarray:
+    """Preprocess image for better OCR accuracy with aggressive enhancement."""
     h, w = image.shape[:2]
+    
+    # Step 1: Resize to standard size
+    max_dim = 1600  # Increased for better text detection
     if max(h, w) > max_dim:
         scale = max_dim / max(h, w)
         new_w, new_h = int(w * scale), int(h * scale)
         image = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
+        if debug:
+            logger.info(f"Resized image to {new_w}x{new_h}")
     
-    # Increase contrast
+    # Step 2: Convert to LAB for better contrast enhancement
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
     l, a, b = cv2.split(lab)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    
+    # Step 3: Aggressive CLAHE (Contrast Limited Adaptive Histogram Equalization)
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(16, 16))  # Increased clipLimit
     l = clahe.apply(l)
+    
+    # Step 4: Apply morphological operations to clean up
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    l = cv2.morphologyEx(l, cv2.MORPH_CLOSE, kernel, iterations=1)
+    
+    # Merge back and convert to BGR
     image = cv2.merge([l, a, b])
     image = cv2.cvtColor(image, cv2.COLOR_LAB2BGR)
     
-    # Sharpen
+    # Step 5: Bilateral filtering to reduce noise while preserving edges
+    image = cv2.bilateralFilter(image, 9, 75, 75)
+    
+    # Step 6: Increase brightness
+    image = cv2.convertScaleAbs(image, alpha=1.1, beta=20)
+    
+    # Step 7: Sharpen more aggressively
     kernel = np.array([[-1, -1, -1],
-                       [-1,  9, -1],
+                       [-1, 13, -1],
                        [-1, -1, -1]]) / 1.0
     image = cv2.filter2D(image, -1, kernel)
+    
+    # Step 8: Add slight dilation to make text more connected
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+    image = cv2.dilate(image, kernel, iterations=1)
+    
+    if debug:
+        logger.info("Applied aggressive preprocessing: CLAHE, morphology, bilateral filter, sharpen, dilate")
     
     return image
 
@@ -152,15 +178,17 @@ def detect_barcode(image: np.ndarray) -> Optional[str]:
         logger.error(f"Barcode detection failed: {e}")
         return None
 
-def extract_text_with_ocr(image: np.ndarray) -> list[dict]:
+def extract_text_with_ocr(image: np.ndarray, debug: bool = False) -> list[dict]:
     """Extract structured OCR blocks from image using PaddleOCR."""
     try:
         ocr = get_ocr()
 
+        # Run OCR with angle detection
         result = ocr.ocr(image, cls=True)
         blocks = []
 
-        if not result:
+        if not result or not result[0]:
+            logger.warning("OCR returned empty result")
             return blocks
 
         for page in result:
@@ -169,19 +197,42 @@ def extract_text_with_ocr(image: np.ndarray) -> list[dict]:
                     box = line[0]
                     text = line[1][0] if line[1] else ""
                     confidence = float(line[1][1]) if line[1] and line[1][1] is not None else 0.0
+                    
                     if text:
+                        # Clean text: remove excessive spaces, newlines
+                        cleaned_text = re.sub(r'\s+', ' ', text.strip())
+                        
+                        # Skip very short or very noisy text
+                        if len(cleaned_text) < 2:
+                            continue
+                        
+                        # Check if text is mostly gibberish (rare unicode chars)
+                        non_ascii = sum(1 for c in cleaned_text if ord(c) > 127)
+                        if non_ascii / len(cleaned_text) > 0.3:
+                            if debug:
+                                logger.warning(f"Skipping gibberish text: {cleaned_text}")
+                            continue
+                        
                         blocks.append({
-                            'text': text.strip(),
+                            'text': cleaned_text,
                             'confidence': confidence,
                             'box': box,
                         })
-                except Exception:
+                        
+                        if debug:
+                            logger.info(f"OCR block (conf={confidence:.2f}): {cleaned_text[:60]}")
+                
+                except Exception as e:
+                    logger.warning(f"Error parsing OCR line: {e}")
                     continue
 
+        if debug:
+            logger.info(f"Total OCR blocks extracted: {len(blocks)}")
+        
         return blocks
     except Exception as e:
         logger.error(f"OCR extraction failed: {e}")
-        return []
+        raise
 
 
 def flatten_ocr_text(blocks: list[dict]) -> str:
@@ -217,45 +268,52 @@ async def extract_product(request: ExtractionRequest):
     }
     """
     try:
-        if not request.images:
-            raise HTTPException(status_code=400, detail="No images provided")
+        if not request.images and not request.ocrText:
+            raise HTTPException(status_code=400, detail="No images or OCR text provided")
         
         # Convert base64 to images and preprocess
         images = []
         ocr_texts = []
         ocr_blocks_per_image = []
         barcodes = []
-        
-        for i, base64_str in enumerate(request.images):
-            try:
-                # Decode image
-                image = base64_to_image(base64_str)
-                
-                # Preprocess
-                processed = preprocess_image(image)
-                images.append(processed)
-                
-                # Extract text
-                logger.info(f"Extracting text from image {i+1}/{len(request.images)}...")
-                blocks = extract_text_with_ocr(processed)
-                ocr_blocks_per_image.append(blocks)
-                ocr_texts.append(flatten_ocr_text(blocks))
-                
-                # Detect barcode
-                logger.info(f"Detecting barcode in image {i+1}/{len(request.images)}...")
-                barcode = detect_barcode(processed)
-                barcodes.append(barcode)
-                if barcode:
-                    logger.info(f"Barcode detected: {barcode}")
-                
-            except Exception as e:
-                logger.error(f"Error processing image {i+1}: {e}")
-                raise HTTPException(status_code=400, detail=f"Error processing image {i+1}: {str(e)}")
-        
-        # Add barcodes to OCR text if found (but not in OCR already)
-        for barcode in [b for b in barcodes if b]:
-            if not any(barcode in text for text in ocr_texts):
-                ocr_texts[0] = f"{ocr_texts[0]}\n{barcode}"
+
+        if not request.images and request.ocrText:
+            ocr_texts = [request.ocrText]
+            ocr_blocks_per_image = [[]]
+            barcodes = [None]
+        elif not request.images and not request.ocrText:
+            raise HTTPException(status_code=400, detail="No images or OCR text provided")
+        else:
+            for i, base64_str in enumerate(request.images):
+                try:
+                    # Decode image
+                    image = base64_to_image(base64_str)
+
+                    # Preprocess
+                    processed = preprocess_image(image)
+                    images.append(processed)
+
+                    # Extract text
+                    logger.info(f"Extracting text from image {i+1}/{len(request.images)}...")
+                    blocks = extract_text_with_ocr(processed)
+                    ocr_blocks_per_image.append(blocks)
+                    ocr_texts.append(flatten_ocr_text(blocks))
+
+                    # Detect barcode
+                    logger.info(f"Detecting barcode in image {i+1}/{len(request.images)}...")
+                    barcode = detect_barcode(processed)
+                    barcodes.append(barcode)
+                    if barcode:
+                        logger.info(f"Barcode detected: {barcode}")
+
+                except Exception as e:
+                    logger.error(f"Error processing image {i+1}: {e}")
+                    raise HTTPException(status_code=400, detail=f"Error processing image {i+1}: {str(e)}")
+
+            # Add barcodes to OCR text if found (but not in OCR already)
+            for barcode in [b for b in barcodes if b]:
+                if not any(barcode in text for text in ocr_texts):
+                    ocr_texts[0] = f"{ocr_texts[0]}\n{barcode}"
         
         logger.info(f"Extracted {len(ocr_texts)} OCR texts")
         

@@ -193,6 +193,14 @@ def validate_brand(value: str) -> Tuple[bool, str, float]:
     # Valid brands are 2-60 chars
     if length < 2 or length > 60:
         return False, value, 0.3
+
+    cleaned = re.sub(r"[^A-Za-z0-9 '&\-]", '', value)
+    noise_ratio = len(cleaned) / max(1, len(value))
+    if noise_ratio < 0.75:
+        return True, value, 0.5
+
+    if re.search(r'[~^_+=/\\|@#\$%&*]', value):
+        return True, value, 0.5
     
     return True, value, 0.9
 
