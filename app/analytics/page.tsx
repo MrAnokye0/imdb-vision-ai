@@ -127,30 +127,26 @@ export default function AnalyticsPage() {
   }
 
   return (
-    <div className="relative min-h-screen bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-indigo-950 to-slate-950 text-slate-100 overflow-hidden pb-12">
-      {/* Decorative liquid glowing blobs */}
-      <div className="absolute top-[-10%] left-[-10%] w-[60%] h-[50%] rounded-full bg-indigo-500/10 blur-[130px] pointer-events-none" />
-      <div className="absolute bottom-[-10%] right-[-10%] w-[60%] h-[50%] rounded-full bg-purple-500/10 blur-[130px] pointer-events-none" />
-
+    <div className="relative min-h-screen bg-slate-50 text-slate-900 pb-12">
       <div className="max-w-7xl mx-auto px-3 sm:px-6 py-8 sm:py-10 space-y-8 sm:space-y-10 relative z-10">
 
         {/* Header */}
-        <div className="flex flex-col sm:flex-row items-start justify-between gap-3 sm:gap-4 border-b border-white/5 pb-4 sm:pb-6">
+        <div className="flex flex-col sm:flex-row items-start justify-between gap-3 sm:gap-4 border-b border-slate-200 pb-4 sm:pb-6">
           <div>
-            <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">Analytics</h1>
-            <p className="text-indigo-200/60 text-xs sm:text-sm mt-1">Product extraction performance and data quality metrics</p>
+            <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">Analytics</h1>
+            <p className="text-slate-500 text-xs sm:text-sm mt-1">Product extraction performance and data quality metrics</p>
           </div>
           <div className="flex gap-2 sm:gap-3 flex-wrap">
             {products.length > 0 && (
               <button
                 onClick={async () => exportExcel(products)}
-                className="text-xs sm:text-sm bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-3 sm:px-5 py-2 sm:py-2.5 rounded-xl transition-all shadow-lg shadow-indigo-500/10 active:scale-95 flex items-center gap-1.5 min-h-[40px]"
+                className="text-xs sm:text-sm bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-3 sm:px-5 py-2 sm:py-2.5 rounded-xl transition-all shadow-sm active:scale-95 flex items-center gap-1.5 min-h-[40px]"
               >
                 📊 Export
               </button>
             )}
             <Link href="/upload"
-              className="text-sm bg-white/10 text-white font-semibold px-5 py-2.5 rounded-xl hover:bg-white/20 transition-all border border-white/10">
+              className="text-sm bg-white text-slate-700 font-semibold px-5 py-2.5 rounded-xl hover:bg-slate-100 transition-all border border-slate-200">
               + New Upload
             </Link>
           </div>
