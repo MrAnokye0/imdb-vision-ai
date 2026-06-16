@@ -101,13 +101,13 @@ export default function ReviewPage() {
         <div className="flex gap-2 flex-wrap">
           {pendingProducts.length > 0 && (
             <>
-              <button onClick={() => exportCSV(pendingProducts)}
-                className="text-sm bg-emerald-600 text-white font-semibold px-4 py-2.5 rounded-xl hover:bg-emerald-700 transition-colors">
-                ⬇ Export CSV
-              </button>
               <button onClick={async () => exportExcel(pendingProducts)}
-                className="text-sm bg-blue-600 text-white font-semibold px-4 py-2.5 rounded-xl hover:bg-blue-700 transition-colors">
-                ⬇ Export Excel
+                className="text-sm bg-indigo-600 text-white font-bold px-4 py-2.5 rounded-xl hover:bg-indigo-700 active:scale-95 transition-all shadow-sm">
+                📊 Export Styled Excel
+              </button>
+              <button onClick={() => exportCSV(pendingProducts)}
+                className="text-sm bg-white text-slate-600 border border-slate-200 font-semibold px-4 py-2.5 rounded-xl hover:bg-slate-50 transition-colors">
+                📄 Export Raw CSV
               </button>
             </>
           )}

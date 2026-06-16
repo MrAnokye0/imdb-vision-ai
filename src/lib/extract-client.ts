@@ -1,15 +1,42 @@
 "use client";
 
-import { runOCR, parseOCRResult, type OCRResult } from "@/src/lib/ocr";
 import { BrowserMultiFormatReader } from "@zxing/library";
 import { lookupBarcode } from "@/src/lib/barcode-lookup";
 import { findByBarcode } from "@/src/lib/firestore";
-import { preprocessImage, urlToBase64 } from "@/src/lib/image-preprocess";
+import { urlToBase64, preprocessImageForBarcode } from "@/src/lib/image-preprocess";
 import { normalizeProduct, generateValidationReport } from "@/src/lib/validation";
 import type { ProductRecord, ExtractionSource, PipelineStep } from "@/src/types/product";
 import type { ValidationReport } from "@/src/lib/validation";
 
-// ─── Extraction result ────────────────────────────────────────────────────────
+const DEV = process.env.NODE_ENV === "development";
+
+// ─── Debug logger ─────────────────────────────────────────────────────────────
+
+type DebugStage = "RESIZE" | "BARCODE" | "ENGINE" | "FIREBASE" | "OPEN_FOOD_FACTS" | "MERGE" | "VALIDATE";
+
+interface DebugEntry {
+  stage: DebugStage;
+  status: "ok" | "empty" | "error" | "timeout";
+  data: unknown;
+  ms: number;
+}
+
+const _debugLog: DebugEntry[] = [];
+
+function log(stage: DebugStage, status: DebugEntry["status"], data: unknown, ms = 0) {
+  _debugLog.push({ stage, status, data, ms });
+  const icon = status === "ok" ? "✅" : status === "empty" ? "⚠️" : status === "timeout" ? "⏱" : "❌";
+  if (DEV) {
+    console.groupCollapsed(`[Pipeline] ${icon} ${stage} (${ms}ms)`);
+    console.log(data);
+    console.groupEnd();
+  }
+}
+
+export function getDebugLog(): DebugEntry[] { return [..._debugLog]; }
+export function clearDebugLog()             { _debugLog.length = 0;  }
+
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface ExtractionResult {
   product: ProductRecord;
@@ -18,36 +45,56 @@ export interface ExtractionResult {
   validation: ValidationReport;
   needsReview: boolean;
   preprocessedUrl?: string;
+  timingMs?: number;
+  telemetry?: any;
 }
 
-interface VisionExtractionResponse {
-  barcode?: string;
-  categoryType?: string;
-  segmentType?: string;
-  manufacturer?: string;
-  brand?: string;
-  productName?: string;
-  weightUnit?: string;
-  packagingType?: string;
-  countryOfOrigin?: string;
-  marketingMessage?: string;
-  fieldConfidenceScores?: Record<string, number>;
+// ─── Fast canvas resize ───────────────────────────────────────────────────────
+
+async function fastResize(url: string, maxDim = 800): Promise<string> {
+  try {
+    const img = await new Promise<HTMLImageElement>((res, rej) => {
+      const el = new window.Image();
+      el.onload  = () => res(el);
+      el.onerror = rej;
+      el.src = url;
+    });
+    const scale  = Math.min(1, maxDim / Math.max(img.naturalWidth, img.naturalHeight));
+    const w      = Math.round(img.naturalWidth  * scale);
+    const h      = Math.round(img.naturalHeight * scale);
+    const canvas = document.createElement("canvas");
+    canvas.width = w; canvas.height = h;
+    const ctx    = canvas.getContext("2d")!;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(img, 0, 0, w, h);
+    return await new Promise<string>((res, rej) =>
+      canvas.toBlob(
+          (b) => (b ? res(URL.createObjectURL(b)) : rej(new Error("toBlob failed"))),
+        "image/jpeg", 0.80
+      )
+    );
+  } catch { return url; }
 }
 
-// ─── Multi-image extraction (process multiple photos of same product) ──────
+// ─── Main pipeline ────────────────────────────────────────────────────────────
+
 export async function extractFromImages(
   imageUrls: string[],
-  onProgress?: (msg: string, steps: PipelineStep[]) => void
+  onProgress?: (msg: string, steps: PipelineStep[]) => void,
+  imageLabels?: string[]
 ): Promise<ExtractionResult> {
+  clearDebugLog();
+  const t0 = performance.now();
+
   const steps: PipelineStep[] = [
-    { id: "preprocess", label: "Image Preprocessing",   status: "pending" },
-    { id: "barcode",    label: "Barcode Detection",      status: "pending" },
-    { id: "firebase",   label: "Firebase Cache Lookup",  status: "pending" },
-    { id: "off",        label: "Open Food Facts Lookup", status: "pending" },
-    { id: "ocr",        label: "OCR Extraction",         status: "pending" },
-    { id: "vision",     label: "Vision AI",              status: "pending" },
-    { id: "merge",      label: "Merge Results",          status: "pending" },
-    { id: "validate",   label: "Validation & Scoring",   status: "pending" },
+    { id: "barcode",  label: "Barcode Detection",        status: "pending" },
+    { id: "ocr",      label: "PaddleOCR (concurrent)",   status: "pending" },
+    { id: "engine",   label: "Product Intelligence",     status: "pending" },
+    { id: "firebase", label: "Firebase Cache Lookup",    status: "pending" },
+    { id: "off",      label: "Open Food Facts",          status: "pending" },
+    { id: "merge",    label: "Merge & Prioritise",       status: "pending" },
+    { id: "validate", label: "Validation & Scoring",     status: "pending" },
   ];
 
   const upd = (id: string, status: PipelineStep["status"], detail?: string) => {
@@ -56,210 +103,134 @@ export async function extractFromImages(
     onProgress?.(detail ?? id, [...steps]);
   };
 
-  const perImage: Array<{
-    url: string;
-    processed?: string;
-    barcode?: string;
-    ocr?: OCRResult | null;
-    parsed?: Partial<ProductRecord>;
-  }> = await Promise.all(imageUrls.map(async (url, index) => {
-    upd("preprocess", "running", `🖼 Preprocessing image ${index + 1}/${imageUrls.length}`);
-    let processed = url;
-    try {
-      const r = await preprocessImage(url, { maxDim: 1200, contrast: 1.35, brightness: 12, sharpen: true });
-      processed = r.url;
-    } catch {
-      // ignore and continue with original image
-    }
+  // ── 1. Resize + ZXing barcode scan (all images parallel, 2s timeout) ─────
+  upd("barcode", "running", "📊 Scanning barcodes…");
+  const t1 = performance.now();
 
-    upd("barcode", "running", `📊 Scanning barcode ${index + 1}/${imageUrls.length}`);
-    upd("ocr", "running", `🔤 Running OCR on image ${index + 1}/${imageUrls.length}`);
+  const perImage = await Promise.all(
+    imageUrls.map(async (url, i) => {
+      const label   = imageLabels?.[i] ?? "Other";
+      const resized = await fastResize(url, 800);
+      
+      // Attempt barcode reading with retry
+      let barcode = "";
+      try {
+        barcode = await readBarcode(resized);
+      } catch (err) {
+        if (DEV) console.log(`[Barcode] Image ${i} (${label}): ${err instanceof Error ? err.message : "Unknown error"}`);
+      }
+      
+      return { url, resized, label, barcode: barcode || undefined };
+    })
+  );
 
-    const [bc, ocrResult] = await Promise.all([
-      readBarcode(processed).catch(() => ""),
-      runOCRWithLayout(processed)
-        .then((ocrRes) => ({ ocr: ocrRes, parsed: parseOCRResult(ocrRes) }))
-        .catch(() => ({ ocr: null as OCRResult | null, parsed: undefined })),
-    ]);
+  // Prioritise the image explicitly labelled "Barcode"
+  const barcodeImageIndex = perImage.findIndex((p) => p.label === "Barcode");
+  const barcodeList = barcodeImageIndex >= 0
+    ? [perImage[barcodeImageIndex].barcode, ...perImage.map((p) => p.barcode)]
+    : perImage.map((p) => p.barcode);
+  const barcode = barcodeList.find(Boolean) ?? "";
 
-    return {
-      url,
-      processed,
-      barcode: bc || undefined,
-      ocr: ocrResult.ocr,
-      parsed: ocrResult.parsed,
-    };
-  }));
+  log("BARCODE", barcode ? "ok" : "empty", { barcode, scanned: perImage.length, found: perImage.filter(p => p.barcode).length }, Math.round(performance.now() - t1));
+  console.log("BARCODE:", barcode || "(none)");
+  upd("barcode", barcode ? "done" : "skipped", barcode ? `✓ ${barcode}` : "⚠️ No barcode found — using OCR fallback");
 
-  const barcode = perImage.map((p) => p.barcode).find(Boolean) ?? "";
+  // ── 2. Run backend extraction + Firebase Cache + Open Food Facts in parallel ─
+  upd("ocr", "running", "🔤 Running PaddleOCR...");
+  upd("engine", "running", "🧠 Running Product Intelligence...");
+  upd("firebase", "running", barcode ? `🔥 Firebase: ${barcode}` : "🔥 Skipping");
+  upd("off",      "running", barcode ? "🌍 Open Food Facts…"      : "🌍 Skipping");
 
-  const firebasePromise = barcode ? findByBarcode(barcode).catch(() => null) : Promise.resolve(null);
-  const offPromise = barcode ? lookupBarcode(barcode).catch(() => null) : Promise.resolve(null);
+  const tBackend = performance.now();
+  const resizedUrls = perImage.map((p) => p.resized);
 
-  upd("firebase", "running", barcode ? `🔥 Checking Firebase for ${barcode}` : "🔥 Skipping Firebase lookup");
-  upd("off", "running", barcode ? `🌍 Checking Open Food Facts for ${barcode}` : "🌍 Skipping Open Food Facts");
+  const [apiProduct, apiOffProduct, backendProduct] = await Promise.all([
+    barcode ? findByBarcode(barcode).catch(() => null) : Promise.resolve(null),
+    barcode ? lookupBarcode(barcode).catch(() => null) : Promise.resolve(null),
+    fetchBackendExtraction(resizedUrls, imageLabels ?? []),
+  ]);
 
-  const [apiProduct, apiOffProduct] = await Promise.all([firebasePromise, offPromise]);
+  const backendMs = Math.round(performance.now() - tBackend);
+  log("FIREBASE",       apiProduct     ? "ok" : "empty", apiProduct     ?? "(not found)");
+  log("OPEN_FOOD_FACTS", apiOffProduct  ? "ok" : "empty", apiOffProduct  ?? "(not found)");
+  log("ENGINE",          backendProduct ? "ok" : "empty", backendProduct ?? "(no response)", backendMs);
 
-  if (apiProduct) {
-    upd("firebase", "done", `Cache hit: ${apiProduct.productName ?? barcode}`);
+  upd("firebase", apiProduct    ? "done" : "skipped", apiProduct    ? `✓ ${apiProduct.productName ?? barcode}` : "Not in cache");
+  upd("off",      apiOffProduct ? "done" : "skipped", apiOffProduct ? `✓ ${apiOffProduct.productName ?? barcode}` : "Not found");
+
+  if (backendProduct) {
+    upd("ocr", "done", `✓ PaddleOCR successful · ${backendMs}ms`);
+    upd("engine", "done", `✓ ${Object.keys(backendProduct).filter(k => backendProduct[k] && k !== "fieldConfidenceScores" && k !== "telemetry" && k !== "completenessScore" && k !== "needsReviewFields").length}/10 fields · ${backendMs}ms`);
   } else {
-    upd("firebase", "skipped", barcode ? "No cached record found" : "No barcode available");
+    upd("ocr", "skipped", "PaddleOCR skipped or failed");
+    upd("engine", "skipped", "Product Intelligence skipped or failed");
   }
 
-  const imageText = perImage
-    .map((p, index) => `IMAGE ${index + 1}\n${p.ocr?.text ?? ""}`)
-    .filter(Boolean)
-    .join("\n\n");
-
-  const preprocessedUrls = perImage.map((p) => p.processed ?? p.url);
-  upd("vision", "running", "🧠 Sending images and OCR text to extraction backend...");
-  const visionData = await runVisionExtraction(preprocessedUrls, imageText);
-  const visionFields = Object.values(visionData).filter((v) => typeof v === "string" && String(v).trim()).length;
-  if (visionFields > 0) {
-    upd("vision", "done", `Vision AI extracted ${visionFields} fields`);
-  } else {
-    upd("vision", "skipped", "Vision AI did not return structured fields");
-  }
+  // ── 3. Merge — source priority: Firebase > OFF > Backend Engine ──────────
+  upd("merge", "running", "🔧 Merging sources…");
 
   type ProductField = keyof ProductRecord;
-  const FIELDS: Array<keyof VisionExtractionResponse> = [
+  const FIELDS: ProductField[] = [
     "barcode", "brand", "productName", "weightUnit", "categoryType",
     "segmentType", "manufacturer", "countryOfOrigin", "packagingType", "marketingMessage",
   ];
 
-  type FieldCandidate = {
-    value: string;
-    score: number;
-    source: string;
-    imageIndex: number;
+  type Candidate = { value: string; score: number; source: string };
+  const candidates = Object.fromEntries(FIELDS.map((f) => [f, [] as Candidate[]])) as Record<ProductField, Candidate[]>;
+
+  const add = (field: ProductField, value: string, score: number, source: string) => {
+    const v = value?.trim();
+    if (!v) return;
+    const ex = candidates[field].find((c) => c.value === v);
+    if (ex) { ex.score = Math.max(ex.score, score); return; }
+    candidates[field].push({ value: v, score: Math.min(1, score), source });
   };
 
-  const candidates: Record<ProductField, FieldCandidate[]> = {} as Record<ProductField, FieldCandidate[]>;
-  for (const f of FIELDS) candidates[f] = [];
+  // Authoritative Cache hits first
+  if (apiProduct)    for (const k of FIELDS) { const v = apiProduct[k];    if (typeof v === "string" && v.trim()) add(k, v, 1.20, "firebase");      }
+  if (apiOffProduct) for (const k of FIELDS) { const v = apiOffProduct[k]; if (typeof v === "string" && v.trim()) add(k, v, 1.10, "openfoodfacts"); }
 
-  const addCandidate = (
-    field: ProductField,
-    value: string,
-    score: number,
-    source: string,
-    imageIndex: number
-  ) => {
-    const trimmed = value?.trim();
-    if (!trimmed) return;
-    const existing = candidates[field].find((c) => c.value === trimmed);
-    if (existing) {
-      existing.score = Math.max(existing.score, score);
-      return;
-    }
-    candidates[field].push({ value: trimmed, score: Math.min(1, score), source, imageIndex });
-  };
-
-  if (apiProduct) {
-    for (const key of FIELDS) {
-      const value = apiProduct[key];
-      if (typeof value === "string" && value.trim()) {
-        addCandidate(key, value, 1.2, "firebase", -1);
+  // Backend rule-based engine
+  if (backendProduct) {
+    for (const k of FIELDS) {
+      const v = backendProduct[k];
+      const conf = backendProduct.fieldConfidenceScores?.[k] ?? 0.80;
+      if (typeof v === "string" && v.trim()) {
+        add(k, v, conf, "ocr");
       }
-    }
-  }
-
-  if (apiOffProduct) {
-    for (const key of FIELDS) {
-      const value = apiOffProduct[key];
-      if (typeof value === "string" && value.trim()) {
-        addCandidate(key, value, 1.15, "openfoodfacts", -1);
-      }
-    }
-  }
-
-  if (visionData) {
-    for (const key of FIELDS) {
-      const value = visionData[key];
-      if (typeof value === "string" && value.trim()) {
-        const visionConfidence = typeof visionData.fieldConfidenceScores?.[key] === "number"
-          ? Math.min(1, visionData.fieldConfidenceScores[key] * 0.5 + 0.5)
-          : 0.92;
-        addCandidate(key, value, visionConfidence, "vision", -1);
-      }
-    }
-  }
-
-  for (let index = 0; index < perImage.length; index += 1) {
-    const p = perImage[index];
-    const parsed = p.parsed ?? {} as Partial<ProductRecord>;
-    const baseOcrScore = typeof parsed.confidenceScore === "number" ? parsed.confidenceScore : 0.55;
-    for (const key of FIELDS) {
-      const parsedValue = parsed[key];
-      if (typeof parsedValue === "string" && parsedValue.trim()) {
-        addCandidate(key, parsedValue, 0.58 + baseOcrScore * 0.28, "ocr", index);
-      }
-    }
-  }
-
-  let aiProduct: Partial<ProductRecord> = {};
-  const hasAnyVision = visionFields > 0;
-  if (!hasAnyVision) {
-    upd("ai", "running", "🤖 Running AI fallback on OCR text...");
-    const firstOCR = perImage.find((p) => p.ocr?.text);
-    if (firstOCR?.ocr) {
-      aiProduct = await runAIExtraction(firstOCR.ocr);
-      const filled = Object.values(aiProduct).filter((v) => typeof v === "string" && String(v).trim()).length;
-      if (filled > 0) {
-        upd("ai", "done", `AI fallback extracted ${filled} fields`);
-      } else {
-        upd("ai", "skipped", "AI fallback did not produce structured output");
-      }
-    } else {
-      upd("ai", "skipped", "No OCR text available for AI fallback");
-    }
-  } else {
-    upd("ai", "skipped", "Vision AI provided structured results");
-  }
-
-  for (const key of FIELDS) {
-    const value = aiProduct[key];
-    if (typeof value === "string" && value.trim()) {
-      addCandidate(key, value, 0.72, "ai", -1);
     }
   }
 
   const fieldConfidenceScores: Record<string, number> = {};
-  const merged: Partial<Record<keyof ProductRecord, string>> = {};
+  const fieldSources: Record<string, string> = {};
+  const merged: Partial<Record<ProductField, string>> = {};
 
-  for (const key of FIELDS) {
-    const list = candidates[key];
-    if (list.length === 0) {
-      merged[key] = "";
-      fieldConfidenceScores[key] = 0;
+  for (const k of FIELDS) {
+    const list = candidates[k];
+    if (!list.length) {
+      merged[k] = "";
+      fieldConfidenceScores[k] = 0;
+      fieldSources[k] = "none";
       continue;
     }
-
-    list.sort((a, b) => {
-      if (b.score !== a.score) return b.score - a.score;
-      if (a.value.length !== b.value.length) return b.value.length - a.value.length;
-      return a.source.localeCompare(b.source);
-    });
-
-    const chosen = list[0];
-    merged[key] = chosen.value;
-    fieldConfidenceScores[key] = Math.min(1, chosen.score);
+    list.sort((a, b) => b.score - a.score);
+    merged[k] = list[0].value;
+    fieldConfidenceScores[k] = Math.min(1, list[0].score);
+    fieldSources[k] = list[0].source;
   }
 
-  merged.barcode = barcode || merged.barcode || "";
-
-  if (merged.barcode) {
-    const barcodeMatch = barcode && barcode === merged.barcode;
-    if (barcodeMatch) fieldConfidenceScores.barcode = 1;
+  // ZXing barcode is always authoritative
+  if (barcode) {
+    merged.barcode = barcode;
+    fieldConfidenceScores.barcode = 1.0;
+    fieldSources.barcode = "zxing";
   }
 
-  // If the vision layer suggested a higher-confidence barcode and it validates, prefer it.
-  if (visionData?.barcode && visionData.barcode.trim()) {
-    merged.barcode = visionData.barcode.trim();
-    fieldConfidenceScores.barcode = Math.max(fieldConfidenceScores.barcode ?? 0, 0.95);
-  }
-
-  upd("merge", "running", "🔧 Merging OCR, barcode, vision, and validation sources...");
+  const source: ExtractionSource = apiProduct
+    ? "firebase"
+    : apiOffProduct
+      ? "openfoodfacts"
+      : "ocr";
 
   const raw: ProductRecord = {
     barcode:          merged.barcode          ?? "",
@@ -272,133 +243,142 @@ export async function extractFromImages(
     countryOfOrigin:  merged.countryOfOrigin  ?? "",
     packagingType:    merged.packagingType     ?? "",
     marketingMessage: merged.marketingMessage ?? "",
-    imageUrl:         preprocessedUrls[0],
-    imageUrls:        preprocessedUrls,
+    imageUrl:         resizedUrls[0],
+    imageUrls:        resizedUrls,
     confidenceScore:  0,
     fieldConfidenceScores,
   };
 
+  log("MERGE", "ok", { merged, fieldConfidenceScores }, Math.round(performance.now() - t0));
+  console.log("MERGED RECORD:", raw);
+
+  // ── 4. Validate ───────────────────────────────────────────────────────────
+  upd("merge",    "done",    "✅ Sources merged");
+  upd("validate", "running", "✅ Validating…");
+
   const normalized = normalizeProduct(raw);
-  const validation = generateValidationReport(normalized);
+  const validation  = generateValidationReport(normalized);
+  const timingMs    = Math.round(performance.now() - t0);
+
   const product = {
     ...normalized,
-    confidenceScore:    validation.overall,
-    fieldConfidenceScores: fieldConfidenceScores,
-    completenessScore:  validation.completeness,
+    confidenceScore:   validation.overall,
+    fieldConfidenceScores,
+    completenessScore: validation.completeness,
   };
 
-  const source: ExtractionSource = apiProduct
-    ? "firebase"
-    : apiOffProduct
-      ? "openfoodfacts"
-      : hasAnyVision
-        ? "ai"
-        : "ocr";
+  log("VALIDATE", "ok", { overall: validation.overall, completeness: validation.completeness, needsReview: validation.needsReview }, timingMs);
+  console.log("VALIDATION RESULT:", { overall: validation.overall, completeness: validation.completeness });
 
-  upd("merge", "done", "✅ Selected highest-confidence fields from all sources");
-  upd("validate", "running", "✅ Validating final record...");
-  upd("validate", "done", `Final confidence ${Math.round(validation.overall * 100)}% · completeness ${Math.round(validation.completeness * 100)}%`);
+  upd("validate", "done", `✓ ${Math.round((product.confidenceScore) * 100)}% confidence · ${timingMs}ms`);
+
+  const combinedTelemetry = {
+    ...(backendProduct?.telemetry || {}),
+    fieldSources,
+  };
 
   return {
-    product,
-    source,
+    product, source,
     steps: [...steps],
     validation,
-    needsReview: validation.needsReview,
-    preprocessedUrl: preprocessedUrls[0],
+    needsReview:     validation.needsReview,
+    preprocessedUrl: resizedUrls[0],
+    timingMs,
+    telemetry:       combinedTelemetry,
   };
 }
 
-// ─── ZXing barcode scan ───────────────────────────────────────────────────────
+// ─── Barcode preprocessing — enhance for better detection ───────────────────
+
+async function enhanceBarcodeImage(url: string): Promise<string> {
+  try {
+    const result = await preprocessImageForBarcode(url, 1600);
+    return result.url;
+  } catch (err) {
+    if (DEV) console.log("Barcode preprocessing failed:", err);
+    return url;
+  }
+}
+
+// ─── ZXing fast detection with OCR fallback ──────────────────────────────────
 
 export async function readBarcode(imageUrl: string): Promise<string> {
   try {
     const reader = new BrowserMultiFormatReader();
-    const result = await reader.decodeFromImageUrl(imageUrl);
+
+    // Attempt 1: Enhanced image (high contrast B&W) — 1.2s timeout
+    let preprocessed: string | null = null;
+    try {
+      preprocessed = await enhanceBarcodeImage(imageUrl);
+      const result = await Promise.race([
+        reader.decodeFromImageUrl(preprocessed),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error("timeout")), 1200)),
+      ]);
+      if (preprocessed !== imageUrl) URL.revokeObjectURL(preprocessed);
+      return result.getText();
+    } catch (err) {
+      if (preprocessed && preprocessed !== imageUrl) URL.revokeObjectURL(preprocessed);
+    }
+
+    // Attempt 2: Original image — 1s timeout
+    // If this fails, OCR engine will handle it (and it's working great!)
+    const result = await Promise.race([
+      reader.decodeFromImageUrl(imageUrl),
+      new Promise<never>((_, rej) => setTimeout(() => rej(new Error("timeout")), 1000)),
+    ]);
     return result.getText();
   } catch {
+    // Fall through to OCR engine — it's handling extraction perfectly
     return "";
   }
 }
 
-// ─── Tesseract OCR (runs on preprocessed image) — structured result
-async function runOCRWithLayout(imageUrl: string): Promise<OCRResult> {
-  return await runOCR(imageUrl);
-}
+// ─── Backend extraction — 25s timeout, non-blocking ──────────────────────────
 
-// ─── OCR regex helpers ────────────────────────────────────────────────────────
-
-
-function safeString(value: unknown): string {
-  return typeof value === "string" ? value.trim() : String(value ?? "").trim();
-}
-
-async function runAIExtraction(ocr: OCRResult): Promise<Partial<ProductRecord>> {
-  try {
-    const response = await fetch("/api/ai-extract", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ocrText: ocr.text ?? "" }),
-    });
-
-    if (!response.ok) return {};
-    const data = await response.json();
-    if (!data?.ok || typeof data.payload !== "object") return {};
-
-    return {
-      barcode:          safeString(data.payload.barcode),
-      categoryType:     safeString(data.payload.categoryType),
-      segmentType:      safeString(data.payload.segmentType),
-      manufacturer:     safeString(data.payload.manufacturer),
-      brand:            safeString(data.payload.brand),
-      productName:      safeString(data.payload.productName),
-      weightUnit:       safeString(data.payload.weightUnit),
-      packagingType:    safeString(data.payload.packagingType),
-      countryOfOrigin:  safeString(data.payload.countryOfOrigin),
-      marketingMessage: safeString(data.payload.marketingMessage),
-    };
-  } catch {
-    return {};
-  }
-}
-
-function emptyProduct(): ProductRecord {
-  return {
-    barcode: "", categoryType: "", segmentType: "", manufacturer: "",
-    brand: "", productName: "", weightUnit: "", packagingType: "",
-    countryOfOrigin: "", marketingMessage: "", confidenceScore: 0,
-  };
-}
-async function runVisionExtraction(
+async function fetchBackendExtraction(
   imageUrls: string[],
-  ocrText: string
-): Promise<VisionExtractionResponse> {
+  imageLabels: string[]
+): Promise<any | null> {
   try {
     const images = await Promise.all(
       imageUrls.map(async (url) => {
-        const converted = await urlToBase64(url);
-        return { data: converted.base64, mimeType: converted.mimeType };
+        try { return (await urlToBase64(url)).base64; }
+        catch { return ""; }
       })
     );
 
-    const response = await fetch("/api/ai-extract", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ocrText, images }),
-    });
+    const controller = new AbortController();
+    const timeout    = setTimeout(() => controller.abort(), 25000);
 
-    if (!response.ok) return {};
-    const data = await response.json();
-    if (!data?.ok || typeof data.payload !== "object") return {};
-    return data.payload as VisionExtractionResponse;
-  } catch {
-    return {};
+    let resp: Response;
+    try {
+      resp = await fetch("/api/ai-extract", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ ocrText: "", images, imageLabels }),
+        signal:  controller.signal,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    if (!data?.ok || typeof data.payload !== "object") return null;
+
+    return data.payload;
+  } catch (err) {
+    console.error("fetchBackendExtraction failed:", err);
+    return null;
   }
 }
 
+// ─── Single-image wrapper ─────────────────────────────────────────────────────
+
 export async function extractFromImage(
   imageUrl: string,
-  onProgress?: (msg: string, steps: PipelineStep[]) => void
+  onProgress?: (msg: string, steps: PipelineStep[]) => void,
+  imageLabels?: string[]
 ): Promise<ExtractionResult> {
-  return extractFromImages([imageUrl], onProgress);
+  return extractFromImages([imageUrl], onProgress, imageLabels);
 }

@@ -1,14 +1,13 @@
-"""
-FastAPI server for product extraction engine.
-Exposes endpoints for OCR, barcode detection, and extraction.
-"""
+import os
+os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
 
+import asyncio
 import logging
 import base64
 import re
 from io import BytesIO
 from typing import List, Optional
-from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import FastAPI, HTTPException, File, UploadFile
 from fastapi.responses import JSONResponse
@@ -25,15 +24,16 @@ except ImportError:
 
 try:
     from pyzbar.pyzbar import decode
-except ImportError:
+except (ImportError, FileNotFoundError, OSError):
     decode = None
 
 from extraction_engine import ExtractionEngine
 
-# ─── Logging ───────────────────────────────────────────────────────────────
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# ── Thread pool for CPU-bound image work ─────────────────────────────────────
+_executor = ThreadPoolExecutor(max_workers=4)
 
 # ─── FastAPI App ──────────────────────────────────────────────────────────
 
@@ -75,17 +75,21 @@ extraction_engine = ExtractionEngine()
 # ─── Request/Response Models ──────────────────────────────────────────────
 
 class ExtractionRequest(BaseModel):
-    images: List[str] = []  # List of base64-encoded images
+    images: List[str] = []              # List of base64-encoded images
     ocrText: Optional[str] = None
-    image_types: Optional[List[str]] = None  # Optional: front, back, side, barcode
-    processing: Optional[dict] = None  # Optional: enable_ocr, enable_barcode, etc.
+    image_types: Optional[List[str]] = None    # Legacy: front, back, side, barcode
+    image_labels: Optional[List[str]] = None   # New: Front, Back, Barcode, Ingredients, Other
+    rekognition_hints: Optional[dict] = None   # AWS Rekognition visual classification hints
+    processing: Optional[dict] = None
 
 class ExtractionResponse(BaseModel):
     product: dict
     field_confidences: dict
     completeness_score: float
     missing_fields: List[str]
+    needs_review_fields: List[str]
     sources: dict
+    telemetry: Optional[dict] = None
 
 # ─── Utility Functions ────────────────────────────────────────────────────
 
@@ -107,54 +111,23 @@ def base64_to_image(base64_str: str) -> np.ndarray:
         logger.error(f"Failed to decode base64 image: {e}")
         raise ValueError(f"Invalid base64 image: {str(e)}")
 
-def preprocess_image(image: np.ndarray, debug: bool = False) -> np.ndarray:
-    """Preprocess image for better OCR accuracy with aggressive enhancement."""
+def preprocess_image(image: np.ndarray) -> np.ndarray:
+    """
+    Fast preprocessing: resize to max 1024px, basic CLAHE contrast.
+    Kept lightweight so OCR still starts within 1-2s per image.
+    """
     h, w = image.shape[:2]
-    
-    # Step 1: Resize to standard size
-    max_dim = 1600  # Increased for better text detection
+    max_dim = 1024
     if max(h, w) > max_dim:
         scale = max_dim / max(h, w)
-        new_w, new_h = int(w * scale), int(h * scale)
-        image = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
-        if debug:
-            logger.info(f"Resized image to {new_w}x{new_h}")
-    
-    # Step 2: Convert to LAB for better contrast enhancement
+        image = cv2.resize(image, (int(w * scale), int(h * scale)),
+                           interpolation=cv2.INTER_AREA)
+
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
     l, a, b = cv2.split(lab)
-    
-    # Step 3: Aggressive CLAHE (Contrast Limited Adaptive Histogram Equalization)
-    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(16, 16))  # Increased clipLimit
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     l = clahe.apply(l)
-    
-    # Step 4: Apply morphological operations to clean up
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-    l = cv2.morphologyEx(l, cv2.MORPH_CLOSE, kernel, iterations=1)
-    
-    # Merge back and convert to BGR
-    image = cv2.merge([l, a, b])
-    image = cv2.cvtColor(image, cv2.COLOR_LAB2BGR)
-    
-    # Step 5: Bilateral filtering to reduce noise while preserving edges
-    image = cv2.bilateralFilter(image, 9, 75, 75)
-    
-    # Step 6: Increase brightness
-    image = cv2.convertScaleAbs(image, alpha=1.1, beta=20)
-    
-    # Step 7: Sharpen more aggressively
-    kernel = np.array([[-1, -1, -1],
-                       [-1, 13, -1],
-                       [-1, -1, -1]]) / 1.0
-    image = cv2.filter2D(image, -1, kernel)
-    
-    # Step 8: Add slight dilation to make text more connected
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
-    image = cv2.dilate(image, kernel, iterations=1)
-    
-    if debug:
-        logger.info("Applied aggressive preprocessing: CLAHE, morphology, bilateral filter, sharpen, dilate")
-    
+    image = cv2.cvtColor(cv2.merge([l, a, b]), cv2.COLOR_LAB2BGR)
     return image
 
 def detect_barcode(image: np.ndarray) -> Optional[str]:
@@ -281,39 +254,38 @@ async def extract_product(request: ExtractionRequest):
             ocr_texts = [request.ocrText]
             ocr_blocks_per_image = [[]]
             barcodes = [None]
-        elif not request.images and not request.ocrText:
-            raise HTTPException(status_code=400, detail="No images or OCR text provided")
         else:
-            for i, base64_str in enumerate(request.images):
+            # ── Process all images in parallel ────────────────────────────
+            def process_one(args):
+                i, base64_str = args
                 try:
-                    # Decode image
-                    image = base64_to_image(base64_str)
-
-                    # Preprocess
+                    image     = base64_to_image(base64_str)
                     processed = preprocess_image(image)
-                    images.append(processed)
-
-                    # Extract text
-                    logger.info(f"Extracting text from image {i+1}/{len(request.images)}...")
-                    blocks = extract_text_with_ocr(processed)
-                    ocr_blocks_per_image.append(blocks)
-                    ocr_texts.append(flatten_ocr_text(blocks))
-
-                    # Detect barcode
-                    logger.info(f"Detecting barcode in image {i+1}/{len(request.images)}...")
-                    barcode = detect_barcode(processed)
-                    barcodes.append(barcode)
+                    blocks    = extract_text_with_ocr(processed)
+                    text      = flatten_ocr_text(blocks)
+                    barcode   = detect_barcode(processed)
                     if barcode:
-                        logger.info(f"Barcode detected: {barcode}")
-
+                        logger.info(f"Image {i+1}: barcode={barcode}")
+                    return blocks, text, barcode
                 except Exception as e:
                     logger.error(f"Error processing image {i+1}: {e}")
-                    raise HTTPException(status_code=400, detail=f"Error processing image {i+1}: {str(e)}")
+                    return [], "", None
 
-            # Add barcodes to OCR text if found (but not in OCR already)
-            for barcode in [b for b in barcodes if b]:
-                if not any(barcode in text for text in ocr_texts):
-                    ocr_texts[0] = f"{ocr_texts[0]}\n{barcode}"
+            loop    = asyncio.get_event_loop()
+            results_list = await loop.run_in_executor(
+                _executor,
+                lambda: list(map(process_one, enumerate(request.images)))
+            )
+
+            for blocks, text, barcode in results_list:
+                ocr_blocks_per_image.append(blocks)
+                ocr_texts.append(text)
+                barcodes.append(barcode)
+
+            # Inject any detected barcode into first OCR text if missing
+            for bc in [b for b in barcodes if b]:
+                if not any(bc in t for t in ocr_texts):
+                    ocr_texts[0] = f"{ocr_texts[0]}\n{bc}"
         
         logger.info(f"Extracted {len(ocr_texts)} OCR texts")
         
@@ -324,14 +296,35 @@ async def extract_product(request: ExtractionRequest):
             ocr_blocks=ocr_blocks_per_image,
             image_types=request.image_types,
             barcodes=barcodes,
+            frontend_labels=request.image_labels,
+            rekognition_hints=request.rekognition_hints,
         )
+
+        # Construct telemetry
+        raw_ocr_per_image = []
+        labels = request.image_labels or []
+        for idx, (text, blocks) in enumerate(zip(ocr_texts, ocr_blocks_per_image)):
+            label = labels[idx] if idx < len(labels) else "Other"
+            raw_ocr_per_image.append({
+                "label": label,
+                "text": text,
+                "blocks": [{"text": b.get("text", ""), "confidence": b.get("confidence", 0.0), "box": b.get("box", [])} for b in blocks]
+            })
+
+        telemetry = {
+            "raw_ocr_per_image": raw_ocr_per_image,
+            "barcodes_detected": [b for b in barcodes if b],
+            "merged_text": "\n\n".join(ocr_texts),
+        }
         
         return ExtractionResponse(
             product=result['product'],
             field_confidences=result['field_confidences'],
             completeness_score=result['completeness_score'],
             missing_fields=result['missing_fields'],
+            needs_review_fields=result.get('needs_review_fields', []),
             sources=result['sources'],
+            telemetry=telemetry,
         )
     
     except HTTPException:
@@ -407,9 +400,14 @@ async def general_exception_handler(request, exc):
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize services on startup."""
-    logger.info("Starting Product Extraction Engine...")
-    logger.info("Services initialized and ready")
+    """Pre-warm PaddleOCR on startup so the first request is fast."""
+    logger.info("Starting Product Extraction Engine…")
+    try:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(_executor, get_ocr)
+        logger.info("PaddleOCR pre-warmed successfully")
+    except Exception as e:
+        logger.warning(f"PaddleOCR pre-warm failed (will load on first request): {e}")
 
 @app.on_event("shutdown")
 async def shutdown_event():

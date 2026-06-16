@@ -21,7 +21,7 @@ export async function POST(req: NextRequest) {
     });
 
     if (!resp.ok) {
-      const text = await resp.text();
+      await resp.text();
       return NextResponse.json({ success: false, error: `Backend error ${resp.status}`, data: {} });
     }
 

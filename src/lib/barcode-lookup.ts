@@ -78,32 +78,37 @@ export async function lookupBarcode(
 ): Promise<Partial<ProductRecord> | null> {
   if (!barcode || barcode.length < 8) return null;
 
+  // Race both Open Food Facts and Open Beauty Facts concurrently
+  // with a hard 4-second timeout — whichever responds first wins.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 4000);
+
   try {
-    // Try Open Food Facts first
-    const res = await fetch(
-      `https://world.openfoodfacts.org/api/v0/product/${barcode}.json`,
-      { headers: { "User-Agent": "IMDB-AutoFill/1.0" } }
-    );
+    const [offRes, obfRes] = await Promise.allSettled([
+      fetch(`https://world.openfoodfacts.org/api/v0/product/${barcode}.json`,
+        { headers: { "User-Agent": "IMDB-AutoFill/1.0" }, signal: controller.signal }),
+      fetch(`https://world.openbeautyfacts.org/api/v0/product/${barcode}.json`,
+        { headers: { "User-Agent": "IMDB-AutoFill/1.0" }, signal: controller.signal }),
+    ]);
 
-    if (!res.ok) return null;
-    const json: OFFResponse = await res.json();
+    clearTimeout(timer);
 
-    if (json.status !== 1 || !json.product) {
-      // Try Open Beauty Facts for cosmetics/personal care
-      const res2 = await fetch(
-        `https://world.openbeautyfacts.org/api/v0/product/${barcode}.json`,
-        { headers: { "User-Agent": "IMDB-AutoFill/1.0" } }
-      );
-      if (!res2.ok) return null;
-      const json2: OFFResponse = await res2.json();
-      if (json2.status !== 1 || !json2.product) return null;
-      return mapToIMDB(barcode, json2.product);
+    // Try Food Facts first
+    if (offRes.status === "fulfilled" && offRes.value.ok) {
+      const json: OFFResponse = await offRes.value.json().catch(() => ({ status: 0, status_verbose: "" }));
+      if (json.status === 1 && json.product) return mapToIMDB(barcode, json.product);
     }
 
-    return mapToIMDB(barcode, json.product);
+    // Fall back to Beauty Facts
+    if (obfRes.status === "fulfilled" && obfRes.value.ok) {
+      const json: OFFResponse = await obfRes.value.json().catch(() => ({ status: 0, status_verbose: "" }));
+      if (json.status === 1 && json.product) return mapToIMDB(barcode, json.product);
+    }
 
+    return null;
   } catch {
-    return null; // network error — fall through to OCR
+    clearTimeout(timer);
+    return null;
   }
 }
 

@@ -73,13 +73,7 @@ function formatDate(): string {
 export function exportCSV(products: ProductRecord[]): void {
   const lines: string[] = [];
 
-  // File header comment
-  lines.push(`# IMDB Auto-Fill Export`);
-  lines.push(`# Generated: ${new Date().toISOString()}`);
-  lines.push(`# Total Records: ${products.length}`);
-  lines.push(``);
-
-  // Column headers
+  // Column headers (start directly on row 1 so databases and Excel parse them cleanly)
   lines.push(COLUMNS.map((c) => escapeCSV(c.header)).join(","));
 
   // Data rows — confidence as percentage string
@@ -87,6 +81,10 @@ export function exportCSV(products: ProductRecord[]): void {
     const row = COLUMNS.map((c) => {
       if (c.key === "confidenceScore") {
         return escapeCSV(`${Math.round((Number(p[c.key]) || 0) * 100)}%`);
+      }
+      if (c.key === "barcode" && p.barcode) {
+        // Excel CSV text escape formula to prevent scientific notation: ="barcode"
+        return `="${p.barcode}"`;
       }
       return escapeCSV(p[c.key] as string);
     });
@@ -109,7 +107,7 @@ export async function exportExcel(products: ProductRecord[]): Promise<void> {
 
   // ── Sheet 1: Products ──────────────────────────────────────────────────────
   const ws = wb.addWorksheet("IMDB Products", {
-    views: [{ state: "frozen", ySplit: 3 }], // freeze title + header
+    views: [{ state: "frozen", ySplit: 3, showGridLines: true }], // freeze title + header, enable gridlines
     pageSetup: {
       paperSize: 9, // A4
       orientation: "landscape",
@@ -126,7 +124,7 @@ export async function exportExcel(products: ProductRecord[]): Promise<void> {
   ws.mergeCells("A1", `K1`);
   const titleCell = ws.getCell("A1");
   titleCell.value = "📦  IMDB Auto-Fill — Item Master Database Export";
-  titleCell.font  = { bold: true, size: 14, color: { argb: C.titleText } };
+  titleCell.font  = { name: "Segoe UI", bold: true, size: 14, color: { argb: C.titleText } };
   titleCell.fill  = { type: "pattern", pattern: "solid", fgColor: { argb: C.titleBg } };
   titleCell.alignment = { vertical: "middle", horizontal: "left", indent: 2 };
   ws.getRow(1).height = 36;
@@ -144,7 +142,7 @@ export async function exportExcel(products: ProductRecord[]): Promise<void> {
   metaCells.forEach(({ cell, value }) => {
     const c = ws.getCell(cell);
     c.value = value;
-    c.font  = { size: 10, color: { argb: C.summaryText }, italic: true };
+    c.font  = { name: "Segoe UI", size: 10, color: { argb: C.summaryText }, italic: true };
     c.fill  = { type: "pattern", pattern: "solid", fgColor: { argb: C.summaryBg } };
     c.alignment = { vertical: "middle", horizontal: "left", indent: 2 };
   });
@@ -157,7 +155,7 @@ export async function exportExcel(products: ProductRecord[]): Promise<void> {
   COLUMNS.forEach((col, i) => {
     const cell = headerRow.getCell(i + 1);
     cell.value = col.header;
-    cell.font  = { bold: true, size: 11, color: { argb: C.headerText } };
+    cell.font  = { name: "Segoe UI", bold: true, size: 11, color: { argb: C.headerText } };
     cell.fill  = { type: "pattern", pattern: "solid", fgColor: { argb: C.headerBg } };
     cell.alignment = { vertical: "middle", horizontal: "center", wrapText: false };
     cell.border = {
@@ -186,7 +184,7 @@ export async function exportExcel(products: ProductRecord[]): Promise<void> {
         pattern: "solid",
         fgColor: { argb: isEven ? C.rowEven : C.rowOdd },
       };
-      cell.font      = { size: 10, color: { argb: "FF1E293B" } };
+      cell.font      = { name: "Segoe UI", size: 10, color: { argb: "FF1E293B" } };
       cell.alignment = { vertical: "middle", wrapText: false };
       cell.border    = {
         bottom: { style: "hair", color: { argb: C.rowBorder } },
@@ -203,7 +201,7 @@ export async function exportExcel(products: ProductRecord[]): Promise<void> {
     confCell.value  = score;
     confCell.numFmt = "0%";
     confCell.font   = {
-      bold: true, size: 10,
+      name: "Segoe UI", bold: true, size: 10,
       color: { argb: pct >= 70 ? C.confHigh : pct >= 50 ? C.confMid : C.confLow },
     };
     confCell.fill = {
@@ -212,14 +210,15 @@ export async function exportExcel(products: ProductRecord[]): Promise<void> {
     };
     confCell.alignment = { vertical: "middle", horizontal: "center" };
 
-    // Barcode — monospace
+    // Barcode — monospace text formatting
     const barcodeCell = row.getCell("barcode");
-    barcodeCell.font = { size: 10, name: "Courier New", color: { argb: "FF334155" } };
+    barcodeCell.font = { name: "Courier New", size: 10, color: { argb: "FF334155" } };
     barcodeCell.alignment = { horizontal: "center" };
+    barcodeCell.numFmt = "@"; // Explicitly treat as Text to avoid scientific notation
 
-    // Product name — slightly bolder
+    // Product name — Segoe UI, bold
     const nameCell = row.getCell("productName");
-    nameCell.font = { size: 10, bold: true, color: { argb: "FF1E293B" } };
+    nameCell.font = { name: "Segoe UI", size: 10, bold: true, color: { argb: "FF1E293B" } };
   });
 
   // Auto-filter on header row
@@ -239,7 +238,7 @@ export async function exportExcel(products: ProductRecord[]): Promise<void> {
   ws2.mergeCells("A1:B1");
   const sumTitle = ws2.getCell("A1");
   sumTitle.value = "Export Summary";
-  sumTitle.font  = { bold: true, size: 13, color: { argb: C.titleText } };
+  sumTitle.font  = { name: "Segoe UI", bold: true, size: 13, color: { argb: C.titleText } };
   sumTitle.fill  = { type: "pattern", pattern: "solid", fgColor: { argb: C.titleBg } };
   sumTitle.alignment = { vertical: "middle", horizontal: "left", indent: 2 };
   ws2.getRow(1).height = 32;
@@ -279,11 +278,11 @@ export async function exportExcel(products: ProductRecord[]): Promise<void> {
     const row = ws2.addRow(r);
     const isSection = typeof r[0] === "string" && r[0] !== "" && r[1] === "";
     if (isSection) {
-      row.getCell(1).font = { bold: true, size: 10, color: { argb: C.accent } };
+      row.getCell(1).font = { name: "Segoe UI", bold: true, size: 10, color: { argb: C.accent } };
       row.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF5F3FF" } };
     } else if (r[0] !== "") {
-      row.getCell(1).font = { size: 10, color: { argb: "FF475569" } };
-      row.getCell(2).font = { bold: true, size: 10, color: { argb: "FF1E293B" } };
+      row.getCell(1).font = { name: "Segoe UI", size: 10, color: { argb: "FF475569" } };
+      row.getCell(2).font = { name: "Segoe UI", bold: true, size: 10, color: { argb: "FF1E293B" } };
     }
     row.height = 20;
   });

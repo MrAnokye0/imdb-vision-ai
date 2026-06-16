@@ -11,10 +11,33 @@ import {
   orderBy,
   limit,
 } from "firebase/firestore";
-import { db } from "@/src/lib/firebase";
+import { ref, uploadString, getDownloadURL } from "firebase/storage";
+import { db, storage } from "@/src/lib/firebase";
 import type { ProductRecord, SavedProduct, ExtractionSource } from "@/src/types/product";
 
 const COLLECTION = "products";
+
+// ─── Upload product image to Firebase Storage ─────────────────────────────────
+
+/**
+ * Uploads a base64 / data URL image to Firebase Storage under products/{docId}/cover.jpg
+ * Returns the permanent download URL, or empty string on failure.
+ */
+export async function uploadProductImage(
+  docId: string,
+  dataUrl: string
+): Promise<string> {
+  if (!dataUrl || !docId) return "";
+  try {
+    const storageRef = ref(storage, `products/${docId}/cover.jpg`);
+    // uploadString accepts data URLs directly
+    await uploadString(storageRef, dataUrl, "data_url");
+    return await getDownloadURL(storageRef);
+  } catch (e) {
+    console.warn("[Storage] Image upload failed:", e);
+    return "";
+  }
+}
 
 // ─── Strip undefined only (never strip null — serverTimestamp uses objects) ──
 
@@ -50,7 +73,8 @@ function toFirestoreProduct(product: ProductRecord) {
 
 export async function saveProduct(
   product: ProductRecord,
-  source: ExtractionSource = "ocr"
+  source: ExtractionSource = "ocr",
+  imageDataUrl?: string          // optional data URL of the product image
 ): Promise<string> {
   const data = stripUndefined({
     ...toFirestoreProduct(product),
@@ -61,6 +85,15 @@ export async function saveProduct(
   });
 
   const ref = await addDoc(collection(db, COLLECTION), data);
+
+  // Upload image to Storage and backfill imageUrl in the same document
+  if (imageDataUrl) {
+    const downloadUrl = await uploadProductImage(ref.id, imageDataUrl);
+    if (downloadUrl) {
+      await updateDoc(doc(db, COLLECTION, ref.id), { imageUrl: downloadUrl });
+    }
+  }
+
   return ref.id;
 }
 
@@ -170,30 +203,46 @@ export async function findDuplicates(product: ProductRecord): Promise<DuplicateM
   if (!product.barcode && !product.brand) return [];
 
   try {
-    const allProducts = await getAllProducts();
+    // Use targeted queries instead of fetching entire collection
+    const queries: Promise<SavedProduct[]>[] = [];
+
+    if (product.barcode) {
+      queries.push(
+        getDocs(query(collection(db, COLLECTION), where("barcode", "==", product.barcode), limit(5)))
+          .then((snap) => snap.docs.map((d) => mapDoc(d.id, d.data() as Record<string, unknown>)))
+          .catch(() => [])
+      );
+    }
+
+    if (product.brand) {
+      queries.push(
+        getDocs(query(collection(db, COLLECTION), where("brand", "==", product.brand), limit(5)))
+          .then((snap) => snap.docs.map((d) => mapDoc(d.id, d.data() as Record<string, unknown>)))
+          .catch(() => [])
+      );
+    }
+
+    const results = await Promise.all(queries);
+    // Deduplicate by id
+    const seen = new Set<string>();
+    const candidates: SavedProduct[] = [];
+    for (const list of results) {
+      for (const p of list) {
+        if (!seen.has(p.id)) { seen.add(p.id); candidates.push(p); }
+      }
+    }
+
     const matches: DuplicateMatch[] = [];
-
-    for (const existing of allProducts) {
+    for (const existing of candidates) {
       const matchFields = {
-        barcode: Boolean(product.barcode && product.barcode === existing.barcode && product.barcode !== ""),
-        brand: Boolean(product.brand && product.brand === existing.brand && product.brand !== ""),
+        barcode:     Boolean(product.barcode     && product.barcode     === existing.barcode     && product.barcode     !== ""),
+        brand:       Boolean(product.brand       && product.brand       === existing.brand       && product.brand       !== ""),
         productName: Boolean(product.productName && product.productName === existing.productName && product.productName !== ""),
-        weight: Boolean(product.weightUnit && product.weightUnit === existing.weightUnit && product.weightUnit !== ""),
+        weight:      Boolean(product.weightUnit  && product.weightUnit  === existing.weightUnit  && product.weightUnit  !== ""),
       };
-
-      // Count matching fields
       const matchCount = Object.values(matchFields).filter(Boolean).length;
-      
-      // A match is considered duplicate if:
-      // - Barcode matches (exact duplicate), OR
-      // - At least 3 other fields match (brand, product name, weight)
       if (matchFields.barcode || matchCount >= 3) {
-        const confidence = matchFields.barcode ? 1.0 : matchCount / 4;
-        matches.push({
-          product: existing,
-          matchFields,
-          confidence,
-        });
+        matches.push({ product: existing, matchFields, confidence: matchFields.barcode ? 1.0 : matchCount / 4 });
       }
     }
 

@@ -22,7 +22,7 @@ export interface OCRResult {
  */
 export async function runOCR(imageUrl: string): Promise<OCRResult> {
   const res = await Tesseract.recognize(imageUrl, "eng", { logger: () => {} });
-  const data = ((res as unknown) as { data?: Record<string, any> })?.data ?? {};
+  const data = ((res as unknown) as { data?: { text?: string; words?: unknown; width?: number; height?: number; image?: { width?: number; height?: number } } })?.data ?? {};
   const words: OCRWord[] = (Array.isArray(data.words) ? data.words : []).map((w) => {
     const word = w as Record<string, unknown>;
     const bbox = word.bbox as Record<string, number> | undefined;
@@ -41,7 +41,7 @@ export async function runOCR(imageUrl: string): Promise<OCRResult> {
   });
 
   return {
-    text: data.text ?? words.map((w) => w.text).join(" "),
+    text: typeof data.text === "string" ? data.text : words.map((w) => w.text).join(" "),
     words,
     width: data?.image?.width ?? data?.width,
     height: data?.image?.height ?? data?.height,

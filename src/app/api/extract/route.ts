@@ -1,16 +1,32 @@
 import { NextRequest, NextResponse } from "next/server";
-import { extractProductData } from "@/src/lib/gemini";
+
+const BACKEND_URL = process.env.EXTRACTION_BACKEND_URL ?? "http://localhost:8000/extract";
 
 export async function POST(req: NextRequest) {
-  const body = await req.json();
+  try {
+    const body = await req.json();
+    if (!body.image || !body.mimeType) {
+      return NextResponse.json({ success: true, data: {} });
+    }
 
-  const result = await extractProductData(
-    body.image,
-    body.mimeType
-  );
+    const payload = { images: [body.image] };
+    const resp = await fetch(BACKEND_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
 
-  return NextResponse.json({
-    success: true,
-    data: result,
-  });
+    if (!resp.ok) {
+      const text = await resp.text();
+      return NextResponse.json({ success: false, error: `Backend error ${resp.status}`, data: {} });
+    }
+
+    const json = await resp.json();
+    const product = json.product ?? {};
+    return NextResponse.json({ success: true, data: product });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[Extract API proxy error]:", msg);
+    return NextResponse.json({ success: false, error: msg, data: {} });
+  }
 }

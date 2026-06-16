@@ -11,15 +11,16 @@ from pathlib import Path
 import difflib
 
 from patterns import (
-    extract_weight, extract_country, extract_barcode, extract_packaging,
+    extract_weight_str, extract_country, extract_barcode, extract_packaging,
     extract_category, extract_segment, extract_marketing_message,
     classify_image_text, IMAGE_TYPE_FRONT_LABEL, IMAGE_TYPE_MANUFACTURER_SIDE,
-    IMAGE_TYPE_BARCODE_SIDE, IMAGE_TYPE_INGREDIENTS_SIDE, IMAGE_TYPE_UNKNOWN
+    IMAGE_TYPE_BARCODE_SIDE, IMAGE_TYPE_INGREDIENTS_SIDE, IMAGE_TYPE_UNKNOWN,
 )
 from validators import (
     validate_barcode, validate_weight, validate_country, validate_packaging,
     validate_brand, validate_product_name, validate_manufacturer,
-    validate_category, validate_segment, validate_marketing_message
+    validate_category, validate_segment, validate_marketing_message,
+    get_needs_review_fields, REVIEW_THRESHOLD,
 )
 
 logger = logging.getLogger(__name__)
@@ -103,290 +104,309 @@ class ExtractionEngine:
         ocr_blocks: Optional[List[List[dict]]] = None,
         image_types: Optional[List[str]] = None,
         barcodes: Optional[List[str]] = None,
+        frontend_labels: Optional[List[str]] = None,
+        rekognition_hints: Optional[dict] = None,
     ) -> Dict:
         """
         Extract IMDB fields from OCR texts (multiple images).
-        
+
         Args:
-            ocr_texts: List of OCR text outputs, one per image
-            ocr_blocks: Optional structured OCR blocks per image
-            image_types: Optional list of pre-classified image types
-            barcodes: Optional list of barcode strings detected per image
-        
-        Returns:
-            Dictionary with extracted fields and confidence scores
+            ocr_texts:           One OCR text string per image.
+            ocr_blocks:          Optional structured PaddleOCR blocks per image.
+            image_types:         Optional pre-classified pipeline image types.
+            barcodes:            Optional pyzbar barcode string per image.
+            frontend_labels:     Optional user-assigned labels from the UploadZone
+                                 session panel (Front/Back/Barcode/Ingredients/Other).
+            rekognition_hints:   Optional dict with keys:
+                                   categoryType, segmentType, packagingType, confidence
+                                 injected from AWS Rekognition visual classification.
         """
         if barcodes is None:
             barcodes = [None] * len(ocr_texts)
-
         if ocr_blocks is None:
             ocr_blocks = [[] for _ in ocr_texts]
+        if frontend_labels is None:
+            frontend_labels = [None] * len(ocr_texts)
 
+        # Classify each image, preferring the explicit frontend label
         if image_types is None or len(image_types) != len(ocr_texts):
             image_types = [
-                classify_image_text(text, barcode_detected=bool(barcode))
-                for text, barcode in zip(ocr_texts, barcodes)
+                classify_image_text(
+                    text,
+                    barcode_detected=bool(barcode),
+                    frontend_label=fl,
+                )
+                for text, barcode, fl in zip(ocr_texts, barcodes, frontend_labels)
             ]
 
         combined_text = "\n".join(ocr_texts)
-        combined_lower = combined_text.lower()
 
-        front_texts = [text for text, t in zip(ocr_texts, image_types) if t == IMAGE_TYPE_FRONT_LABEL]
-        manufacturer_texts = [text for text, t in zip(ocr_texts, image_types) if t == IMAGE_TYPE_MANUFACTURER_SIDE]
-        barcode_texts = [text for text, t in zip(ocr_texts, image_types) if t == IMAGE_TYPE_BARCODE_SIDE]
-        ingredients_texts = [text for text, t in zip(ocr_texts, image_types) if t == IMAGE_TYPE_INGREDIENTS_SIDE]
-        unknown_texts = [text for text, t in zip(ocr_texts, image_types) if t == IMAGE_TYPE_UNKNOWN]
+        front_texts        = [t for t, tp in zip(ocr_texts, image_types) if tp == IMAGE_TYPE_FRONT_LABEL]
+        manufacturer_texts = [t for t, tp in zip(ocr_texts, image_types) if tp == IMAGE_TYPE_MANUFACTURER_SIDE]
+        ingredients_texts  = [t for t, tp in zip(ocr_texts, image_types) if tp == IMAGE_TYPE_INGREDIENTS_SIDE]
+        front_blocks       = [b for b, tp in zip(ocr_blocks, image_types) if tp == IMAGE_TYPE_FRONT_LABEL]
 
-        front_blocks = [blocks for blocks, t in zip(ocr_blocks, image_types) if t == IMAGE_TYPE_FRONT_LABEL]
-
-        front_text = "\n".join(front_texts).strip()
+        front_text        = "\n".join(front_texts).strip()
         manufacturer_text = "\n".join(manufacturer_texts).strip()
-        barcode_text = "\n".join(barcode_texts).strip()
-        ingredients_text = "\n".join(ingredients_texts).strip()
-        unknown_text = "\n".join(unknown_texts).strip()
+        ingredients_text  = "\n".join(ingredients_texts).strip()
 
-        # Extract all fields
-        results = {}
-        field_confidences = {}
-        source_map = {}
+        results           : Dict = {}
+        field_confidences : Dict = {}
+        source_map        : Dict = {'imageTypes': image_types}
 
-        source_map['imageTypes'] = image_types
-
-        # ─── Barcode ──────────────────────────────────────────────────────
-        barcode_candidate = None
-        for barcode in barcodes:
-            if barcode:
-                barcode_candidate = barcode.strip()
-                break
+        # ── Barcode ────────────────────────────────────────────────────────
+        barcode_candidate = next((b.strip() for b in barcodes if b), None)
+        if not barcode_candidate:
+            # Fall back to regex scan across all texts
+            for text in ocr_texts:
+                found = extract_barcode(text)
+                if found:
+                    barcode_candidate = found
+                    break
 
         if barcode_candidate:
             is_valid, fmt, conf = validate_barcode(barcode_candidate)
-            if is_valid:
-                results['barcode'] = barcode_candidate
-                field_confidences['barcode'] = 1.0
-                source_map['barcode'] = "pyzbar"
-            else:
-                results['barcode'] = barcode_candidate
-                field_confidences['barcode'] = 0.0
-                source_map['barcode'] = "pyzbar_invalid_length"
+            results['barcode']             = barcode_candidate
+            field_confidences['barcode']   = conf
+            source_map['barcode']          = "pyzbar" if any(barcodes) else "regex"
         else:
-            results['barcode'] = ""
-            field_confidences['barcode'] = 0.0
-            source_map['barcode'] = "none"
+            results['barcode']             = ""
+            field_confidences['barcode']   = 0.0
+            source_map['barcode']          = "none"
 
-        # ─── Weight/Volume ────────────────────────────────────────────────
+        # ── Weight/Volume ──────────────────────────────────────────────────
         weight_source = front_text or combined_text
-        weight = extract_weight(weight_source)
+        weight = extract_weight_str(weight_source)
+        if not weight and manufacturer_text:
+            weight = extract_weight_str(manufacturer_text)
         if weight:
             is_valid, normalized, conf = validate_weight(weight)
-            results['weightUnit'] = normalized
+            # Boost confidence when the same value appears in multiple images
+            corroboration = sum(1 for t in ocr_texts if extract_weight_str(t) == normalized)
+            if corroboration >= 2:
+                conf = min(1.0, conf + 0.1)
+            results['weightUnit']           = normalized
             field_confidences['weightUnit'] = conf
-            source_map['weightUnit'] = "front_label" if front_text else "combined"
-
-            weight_count = sum(1 for text in ocr_texts if extract_weight(text))
-            if weight_count >= 2:
-                field_confidences['weightUnit'] = min(1.0, conf + 0.1)
+            source_map['weightUnit']        = "front_label" if front_text else "combined"
         else:
-            results['weightUnit'] = ""
+            results['weightUnit']           = ""
             field_confidences['weightUnit'] = 0.0
-            source_map['weightUnit'] = "none"
+            source_map['weightUnit']        = "none"
 
-        # ─── Country of Origin ────────────────────────────────────────────
+        # ── Country of Origin ──────────────────────────────────────────────
         country_source = manufacturer_text or combined_text
         country = extract_country(country_source)
         if country:
             is_valid, normalized, conf = validate_country(country)
-            results['countryOfOrigin'] = normalized
+            results['countryOfOrigin']           = normalized
             field_confidences['countryOfOrigin'] = conf
-            source_map['countryOfOrigin'] = "manufacturer_side" if manufacturer_text else "combined"
+            source_map['countryOfOrigin']        = "manufacturer_side" if manufacturer_text else "combined"
         else:
-            results['countryOfOrigin'] = ""
+            results['countryOfOrigin']           = ""
             field_confidences['countryOfOrigin'] = 0.0
-            source_map['countryOfOrigin'] = "none"
+            source_map['countryOfOrigin']        = "none"
 
-        # ─── Packaging Type ───────────────────────────────────────────────
-        packaging_source = front_text or unknown_text or combined_text
-        packaging = extract_packaging(packaging_source)
-        if packaging:
-            is_valid, normalized, conf = validate_packaging(packaging)
-            results['packagingType'] = normalized
-            field_confidences['packagingType'] = conf
-            source_map['packagingType'] = "front_label"
+        # ── Packaging Type ─────────────────────────────────────────────────
+        # AWS Rekognition hint takes priority when confidence ≥ 0.7
+        rek_packaging      = (rekognition_hints or {}).get('packagingType', '')
+        rek_packaging_conf = (rekognition_hints or {}).get('confidence', 0) / 100 if rek_packaging else 0
+
+        packaging = None
+        pkg_conf  = 0.0
+        pkg_src   = "none"
+
+        if rek_packaging and rek_packaging_conf >= 0.70:
+            packaging = rek_packaging
+            pkg_conf  = rek_packaging_conf
+            pkg_src   = "rekognition"
         else:
-            results['packagingType'] = ""
-            field_confidences['packagingType'] = 0.0
-            source_map['packagingType'] = "none"
+            packaging_source = front_text or combined_text
+            packaging = extract_packaging(packaging_source)
+            if packaging:
+                _, packaging, pkg_conf = validate_packaging(packaging)
+                pkg_src = "front_label"
 
-        # ─── Category ─────────────────────────────────────────────────────
-        category_source = ingredients_text or front_text or combined_text
-        category = extract_category(category_source)
-        if category:
-            is_valid, normalized, conf = validate_category(category)
-            results['categoryType'] = normalized
-            field_confidences['categoryType'] = conf if is_valid else 0.6
-            source_map['categoryType'] = "ingredients_side" if ingredients_text else "combined"
+        results['packagingType']           = packaging or ""
+        field_confidences['packagingType'] = pkg_conf
+        source_map['packagingType']        = pkg_src
+
+        # ── Category ──────────────────────────────────────────────────────
+        # AWS Rekognition hint takes priority when confidence ≥ 0.75
+        rek_category      = (rekognition_hints or {}).get('categoryType', '')
+        rek_category_conf = (rekognition_hints or {}).get('confidence', 0) / 100 if rek_category else 0
+
+        category = None
+        cat_conf = 0.0
+        cat_src  = "none"
+
+        if rek_category and rek_category_conf >= 0.75:
+            category = rek_category
+            cat_conf = rek_category_conf
+            cat_src  = "rekognition"
         else:
-            results['categoryType'] = ""
-            field_confidences['categoryType'] = 0.0
-            source_map['categoryType'] = "none"
+            category_source = ingredients_text or front_text or combined_text
+            category = extract_category(category_source)
+            if category:
+                is_valid, category, cat_conf = validate_category(category)
+                if not is_valid:
+                    cat_conf = 0.55
+                cat_src = "ingredients_side" if ingredients_text else "combined"
 
-        # ─── Segment ──────────────────────────────────────────────────────
-        segment_source = ingredients_text or front_text or combined_text
-        segment = extract_segment(segment_source)
-        if segment:
-            is_valid, normalized, conf = validate_segment(segment)
-            results['segmentType'] = normalized
-            field_confidences['segmentType'] = conf
-            source_map['segmentType'] = "ingredients_side"
+        results['categoryType']           = category or ""
+        field_confidences['categoryType'] = cat_conf
+        source_map['categoryType']        = cat_src
+
+        # ── Segment ────────────────────────────────────────────────────────
+        rek_segment = (rekognition_hints or {}).get('segmentType', '')
+        rek_seg_conf = rek_category_conf if rek_segment else 0
+
+        segment = None
+        seg_conf = 0.0
+        seg_src  = "none"
+
+        if rek_segment and rek_seg_conf >= 0.75:
+            segment  = rek_segment
+            seg_conf = rek_seg_conf
+            seg_src  = "rekognition"
         else:
-            results['segmentType'] = ""
-            field_confidences['segmentType'] = 0.0
-            source_map['segmentType'] = "none"
+            segment_source = ingredients_text or front_text or combined_text
+            segment = extract_segment(segment_source)
+            if segment:
+                _, segment, seg_conf = validate_segment(segment)
+                seg_src = "ingredients_side" if ingredients_text else "combined"
 
-        # ─── Marketing Message ────────────────────────────────────────────
+        results['segmentType']           = segment or ""
+        field_confidences['segmentType'] = seg_conf
+        source_map['segmentType']        = seg_src
+
+        # ── Marketing Message ──────────────────────────────────────────────
         marketing_source = front_text or ingredients_text or combined_text
         marketing = extract_marketing_message(marketing_source)
         if marketing:
-            is_valid, normalized, conf = validate_marketing_message(marketing)
-            results['marketingMessage'] = normalized
-            field_confidences['marketingMessage'] = conf
-            source_map['marketingMessage'] = "front_label"
+            _, marketing, mkt_conf = validate_marketing_message(marketing)
+            results['marketingMessage']           = marketing
+            field_confidences['marketingMessage'] = mkt_conf
+            source_map['marketingMessage']        = "front_label"
         else:
-            results['marketingMessage'] = ""
+            results['marketingMessage']           = ""
             field_confidences['marketingMessage'] = 0.0
-            source_map['marketingMessage'] = "none"
+            source_map['marketingMessage']        = "none"
 
-        # ─── Brand ──────────────────────────────────────────────────────
+        # ── Brand ──────────────────────────────────────────────────────────
         brand = self._extract_brand(
             front_texts or ocr_texts,
             front_blocks or ocr_blocks,
         )
         if brand:
             is_valid, normalized, conf = validate_brand(brand)
-            if conf >= 0.75:
-                results['brand'] = normalized
+            if conf >= 0.6:
+                results['brand']           = normalized
                 field_confidences['brand'] = conf
-                source_map['brand'] = "front_label" if front_texts else "text_extraction"
+                source_map['brand']        = "front_label" if front_texts else "text_extraction"
             else:
-                results['brand'] = ""
+                results['brand']           = ""
                 field_confidences['brand'] = conf
-                source_map['brand'] = "low_confidence"
+                source_map['brand']        = "low_confidence"
         else:
-            results['brand'] = ""
+            results['brand']           = ""
             field_confidences['brand'] = 0.0
-            source_map['brand'] = "none"
+            source_map['brand']        = "none"
 
-        # ─── Manufacturer (from knowledge base) ────────────────────────────
-        manufacturer = ""
+        # ── Manufacturer ───────────────────────────────────────────────────
+        manufacturer      = ""
         manufacturer_conf = 0.0
         if results.get('brand'):
             kb_entry = self.kb.lookup(results['brand'])
             if kb_entry and kb_entry.get('manufacturer'):
-                manufacturer = kb_entry['manufacturer']
+                manufacturer      = kb_entry['manufacturer']
                 manufacturer_conf = 0.95
                 source_map['manufacturer'] = "knowledge_base"
 
+                # Fill category/segment from KB if Rekognition did not already provide them
                 if not results.get('categoryType') and kb_entry.get('category'):
-                    results['categoryType'] = kb_entry['category']
+                    results['categoryType']           = kb_entry['category']
                     field_confidences['categoryType'] = 0.92
-                    source_map['categoryType'] = "knowledge_base"
-
+                    source_map['categoryType']        = "knowledge_base"
                 if not results.get('segmentType') and kb_entry.get('segment'):
-                    results['segmentType'] = kb_entry['segment']
+                    results['segmentType']           = kb_entry['segment']
                     field_confidences['segmentType'] = 0.92
-                    source_map['segmentType'] = "knowledge_base"
+                    source_map['segmentType']        = "knowledge_base"
 
         if not manufacturer and manufacturer_text:
             manufacturer = self._extract_manufacturer_from_text(manufacturer_text)
             if manufacturer:
-                is_valid, normalized, conf = validate_manufacturer(manufacturer)
-                manufacturer = normalized
-                manufacturer_conf = conf
+                _, manufacturer, manufacturer_conf = validate_manufacturer(manufacturer)
                 source_map['manufacturer'] = "manufacturer_side"
 
-        results['manufacturer'] = manufacturer
+        results['manufacturer']           = manufacturer
         field_confidences['manufacturer'] = manufacturer_conf
 
-        # ─── Product Name ─────────────────────────────────────────────────
+        # ── Product Name ───────────────────────────────────────────────────
         product_name = self._extract_product_name(front_texts, results.get('brand', ''))
         if product_name:
-            is_valid, normalized, conf = validate_product_name(product_name)
-            results['productName'] = normalized
+            _, normalized, conf = validate_product_name(product_name)
+            results['productName']           = normalized
             field_confidences['productName'] = conf
-            source_map['productName'] = "front_label"
+            source_map['productName']        = "front_label"
         else:
-            results['productName'] = ""
+            results['productName']           = ""
             field_confidences['productName'] = 0.0
-            source_map['productName'] = "none"
+            source_map['productName']        = "none"
 
-        # Overall confidence (weighted average)
+        # ── Weighted overall confidence ────────────────────────────────────
         weights = {
-            'barcode': 1.0,
-            'brand': 1.2,
-            'productName': 1.1,
-            'weightUnit': 0.8,
-            'categoryType': 0.9,
-            'segmentType': 0.7,
-            'manufacturer': 0.9,
-            'countryOfOrigin': 0.7,
-            'packagingType': 0.8,
+            'barcode':          1.0,
+            'brand':            1.2,
+            'productName':      1.1,
+            'weightUnit':       0.8,
+            'categoryType':     0.9,
+            'segmentType':      0.7,
+            'manufacturer':     0.9,
+            'countryOfOrigin':  0.7,
+            'packagingType':    0.8,
             'marketingMessage': 0.6,
         }
-        
-        total_weight = sum(weights.values())
-        weighted_conf = sum(
-            field_confidences.get(field, 0) * weights.get(field, 1.0)
-            for field in weights
+        total_weight   = sum(weights.values())
+        weighted_conf  = sum(
+            field_confidences.get(f, 0) * weights.get(f, 1.0) for f in weights
         ) / total_weight
-        
-        # Completeness score (0-1)
-        populated_fields = sum(
-            1 for field in results
-            if results[field] and results[field].strip() and field_confidences.get(field, 0) > 0.3
+
+        populated = sum(
+            1 for f in results
+            if results[f] and str(results[f]).strip() and field_confidences.get(f, 0) >= REVIEW_THRESHOLD
         )
-        completeness_score = min(1.0, populated_fields / 10)
-        
-        # Overall confidence = weighted avg * completeness
-        overall_confidence = min(1.0, weighted_conf * (0.5 + completeness_score * 0.5))
-        
-        # Missing fields
-        missing_fields = [
-            field for field in results
-            if not results[field] or not results[field].strip()
-        ]
-        
+        completeness_score   = min(1.0, populated / 10)
+        overall_confidence   = min(1.0, weighted_conf * (0.5 + completeness_score * 0.5))
+
+        missing_fields       = [f for f in results if not results[f] or not str(results[f]).strip()]
+        needs_review_fields  = get_needs_review_fields(field_confidences)
+
         return {
             'product': {
-                'barcode': results.get('barcode', ''),
-                'categoryType': results.get('categoryType', ''),
-                'segmentType': results.get('segmentType', ''),
-                'manufacturer': results.get('manufacturer', ''),
-                'brand': results.get('brand', ''),
-                'productName': results.get('productName', ''),
-                'weightUnit': results.get('weightUnit', ''),
-                'packagingType': results.get('packagingType', ''),
-                'countryOfOrigin': results.get('countryOfOrigin', ''),
+                'barcode':          results.get('barcode', ''),
+                'categoryType':     results.get('categoryType', ''),
+                'segmentType':      results.get('segmentType', ''),
+                'manufacturer':     results.get('manufacturer', ''),
+                'brand':            results.get('brand', ''),
+                'productName':      results.get('productName', ''),
+                'weightUnit':       results.get('weightUnit', ''),
+                'packagingType':    results.get('packagingType', ''),
+                'countryOfOrigin':  results.get('countryOfOrigin', ''),
                 'marketingMessage': results.get('marketingMessage', ''),
-                'confidenceScore': round(overall_confidence, 2),
+                'confidenceScore':  round(overall_confidence, 2),
             },
-            'field_confidences': {
-                k: round(v, 2) for k, v in field_confidences.items()
-            },
-            'completeness_score': round(completeness_score, 2),
-            'missing_fields': missing_fields,
-            'sources': source_map,
+            'field_confidences':   {k: round(v, 2) for k, v in field_confidences.items()},
+            'completeness_score':  round(completeness_score, 2),
+            'missing_fields':      missing_fields,
+            'needs_review_fields': needs_review_fields,
+            'sources':             source_map,
         }
-    
+
     def _extract_brand(self, ocr_texts: List[str], ocr_blocks: Optional[List[List[dict]]] = None) -> Optional[str]:
         """
         Extract brand name from OCR texts and optional OCR blocks.
-        Strategy: Prefer known brands and clean front-label lines.
+        Strategy: Prefer known brands first, then layout/font height rules.
         """
-        if ocr_blocks:
-            candidate = self._extract_brand_from_blocks(ocr_blocks)
-            if candidate and self._is_likely_brand_line(candidate):
-                return candidate
-
         if not ocr_texts:
             return None
 
@@ -396,14 +416,19 @@ class ExtractionEngine:
                 continue
             lines.extend([l.strip() for l in text.split('\n') if l.strip()])
 
-        if not lines:
-            return None
-
         # Prefer a known brand name from the knowledge base if present.
         for line in lines:
             brand_name = self._brand_text_matches_known_brand(line)
             if brand_name:
                 return brand_name
+
+        if ocr_blocks:
+            candidate = self._extract_brand_from_blocks(ocr_blocks)
+            if candidate and self._is_likely_brand_line(candidate):
+                return candidate
+
+        if not lines:
+            return None
 
         scored: List[Tuple[int, str]] = []
         for line in lines:
@@ -530,7 +555,11 @@ class ExtractionEngine:
             'imported by', 'made in', 'made by', 'country of origin', 'best seller',
             'limited edition', 'sugar free', 'gluten free', 'organic', 'no added sugar',
             'new', 'www.', 'http', 'phone', 'tel', 'fax', 'email', '@', 'street',
-            'road', 'lane', 'avenue', 'city', 'postal', 'zip', 'postcode', 'barcode'
+            'road', 'lane', 'avenue', 'city', 'postal', 'zip', 'postcode', 'barcode',
+            'soap', 'water', 'oil', 'liquid', 'product of', 'distributor', 'expiry', 'exp',
+            'mfg', 'batch', 'lot', 'weight', 'net wt', 'net weight', 'volume', 'qty',
+            'quantity', 'serving', 'size', 'calories', 'fat', 'cholesterol', 'sodium',
+            'carbohydrate', 'protein', 'vitamins', 'calcium', 'iron', 'percent', 'daily value'
         ]
         return any(keyword in text_lower for keyword in reject_keywords)
 

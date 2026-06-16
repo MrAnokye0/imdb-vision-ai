@@ -132,18 +132,18 @@ export default function DatabasePage() {
         </div>
         <div className="flex gap-2 flex-wrap">
           <button
-            onClick={async () => { setExporting(true); await exportCSV(exportTarget); setExporting(false); }}
-            disabled={exportTarget.length === 0 || exporting}
-            className="text-sm bg-emerald-600 text-white font-semibold px-4 py-2.5 rounded-xl hover:bg-emerald-700 disabled:opacity-50 transition-colors"
-          >
-            ⬇ Export CSV {selected.size > 0 && `(${selected.size} selected)`}
-          </button>
-          <button
             onClick={async () => { setExporting(true); await exportExcel(exportTarget); setExporting(false); }}
             disabled={exportTarget.length === 0 || exporting}
-            className="text-sm bg-blue-600 text-white font-semibold px-4 py-2.5 rounded-xl hover:bg-blue-700 disabled:opacity-50 transition-colors"
+            className="text-sm bg-indigo-600 text-white font-bold px-4 py-2.5 rounded-xl hover:bg-indigo-700 active:scale-95 transition-all shadow-sm"
           >
-            {exporting ? "⏳ Building…" : `⬇ Export Excel ${selected.size > 0 ? `(${selected.size})` : `(${filtered.length})`}`}
+            {exporting ? "⏳ Building…" : `📊 Export Styled Excel ${selected.size > 0 ? `(${selected.size})` : `(${filtered.length})`}`}
+          </button>
+          <button
+            onClick={async () => { setExporting(true); await exportCSV(exportTarget); setExporting(false); }}
+            disabled={exportTarget.length === 0 || exporting}
+            className="text-sm bg-white text-slate-600 border border-slate-200 font-semibold px-4 py-2.5 rounded-xl hover:bg-slate-50 disabled:opacity-50 transition-colors"
+          >
+            📄 Export Raw CSV {selected.size > 0 && `(${selected.size} selected)`}
           </button>
           {selected.size > 0 && (
             <button onClick={handleDeleteSelected}
@@ -211,7 +211,7 @@ export default function DatabasePage() {
       ) : (
         <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full text-xs sm:text-sm min-w-max">
               <thead className="bg-slate-50 border-b border-slate-200">
                 <tr>
                   <th className="w-10 px-3 py-3">

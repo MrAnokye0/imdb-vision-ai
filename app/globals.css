@@ -11,6 +11,27 @@
   --success: #16a34a;
   --warning: #d97706;
   --danger: #dc2626;
+
+  /* Responsive font sizes */
+  --font-xs: clamp(0.65rem, 2vw, 0.75rem);
+  --font-sm: clamp(0.8rem, 2.5vw, 0.875rem);
+  --font-base: clamp(0.95rem, 3vw, 1rem);
+  --font-lg: clamp(1.05rem, 3.5vw, 1.125rem);
+  --font-xl: clamp(1.15rem, 4vw, 1.25rem);
+  --font-2xl: clamp(1.3rem, 5vw, 1.5rem);
+  --font-3xl: clamp(1.5rem, 6vw, 1.875rem);
+  --font-4xl: clamp(1.75rem, 7vw, 2.25rem);
+  --font-5xl: clamp(2rem, 8vw, 3rem);
+  --font-6xl: clamp(2.25rem, 10vw, 3.75rem);
+
+  /* Responsive spacing */
+  --space-xs: clamp(0.25rem, 1vw, 0.5rem);
+  --space-sm: clamp(0.5rem, 1.5vw, 0.75rem);
+  --space-md: clamp(0.75rem, 2vw, 1rem);
+  --space-lg: clamp(1rem, 3vw, 1.5rem);
+  --space-xl: clamp(1.5rem, 4vw, 2rem);
+  --space-2xl: clamp(2rem, 5vw, 2.5rem);
+  --space-3xl: clamp(2.5rem, 6vw, 3rem);
 }
 
 body {
@@ -18,9 +39,19 @@ body {
   color: var(--text);
   font-family: var(--font-geist-sans), system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
 }
 
 * { box-sizing: border-box; }
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+html, body {
+  width: 100%;
+  max-width: 100%;
+}
 
 /* smooth focus ring */
 :focus-visible {
@@ -33,8 +64,13 @@ body {
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 1rem;
+  border-radius: clamp(0.5rem, 3vw, 1rem);
   box-shadow: 0 1px 3px 0 rgb(0 0 0 / .06), 0 1px 2px -1px rgb(0 0 0 / .04);
+  transition: all 300ms ease;
+}
+
+.card:hover {
+  box-shadow: 0 12px 24px -18px rgba(15,23,42,0.28);
 }
 
 .liquid-nav {
@@ -132,6 +168,7 @@ svg {
   background: linear-gradient(135deg, #4f46e5, #8b5cf6);
 }
 
+/* ── Mobile optimizations ──────────────────────────────────────────────────── */
 @media (max-width: 768px) {
   .liquid-nav {
     border-radius: 0 0 1.5rem 1.5rem;
@@ -146,5 +183,165 @@ svg {
   .liquid-nav-cta {
     padding-left: 0.85rem;
     padding-right: 0.85rem;
+    min-height: 2rem;
+    font-size: 0.75rem;
   }
+
+  /* Improve touch targets on mobile */
+  button, a, [role="button"] {
+    min-height: 44px;
+  }
+
+  /* Better text sizing on small screens */
+  body {
+    font-size: clamp(0.875rem, 2.5vw, 1rem);
+  }
+
+  h1 {
+    font-size: clamp(1.5rem, 6vw, 2rem);
+  }
+
+  h2 {
+    font-size: clamp(1.25rem, 5vw, 1.875rem);
+  }
+
+  h3 {
+    font-size: clamp(1rem, 4vw, 1.25rem);
+  }
+
+  /* Better padding for mobile */
+  .card {
+    padding: clamp(0.75rem, 3vw, 1.5rem);
+  }
+
+  /* Table mobile view */
+  table {
+    font-size: 0.75rem;
+  }
+
+  /* Improve form inputs on mobile */
+  input[type="text"],
+  input[type="email"],
+  input[type="number"],
+  input[type="password"],
+  select,
+  textarea {
+    min-height: 44px;
+    padding: 0.5rem 0.75rem;
+    font-size: 1rem;
+  }
+
+  /* Better modal sizing */
+  [role="dialog"],
+  .modal {
+    max-height: 95vh;
+    overflow-y: auto;
+  }
+
+  /* Improve grid spacing on mobile */
+  .grid {
+    gap: clamp(0.5rem, 2vw, 1rem);
+  }
+
+  /* Prevent zooming on input focus */
+  input[type="text"],
+  input[type="email"],
+  input[type="number"],
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}
+
+@media (max-width: 640px) {
+  body {
+    font-size: 0.875rem;
+  }
+
+  /* Stack layout on very small screens */
+  [class*="grid-cols-2"],
+  [class*="grid-cols-3"],
+  [class*="grid-cols-4"] {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Better flex wrapping */
+  .flex-wrap {
+    gap: 0.5rem;
+  }
+
+  /* Reduce padding on tiny screens */
+  .px-6 {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+
+  .py-6 {
+    padding-top: 1rem;
+    padding-bottom: 1rem;
+  }
+
+  /* Make images responsive */
+  img {
+    max-width: 100%;
+    height: auto;
+  }
+
+  /* Better button sizes on mobile */
+  .px-4 {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+
+  /* Ensure readable text on mobile */
+  .text-xs {
+    font-size: 0.75rem;
+    line-height: 1.25rem;
+  }
+
+  .text-sm {
+    font-size: 0.875rem;
+    line-height: 1.5rem;
+  }
+
+  /* Optimize scrollable areas */
+  .overflow-x-auto {
+    -webkit-overflow-scrolling: touch;
+    scroll-behavior: smooth;
+  }
+
+  /* Better touch feedback */
+  button:active,
+  a:active {
+    opacity: 0.7;
+  }
+
+  /* Improve readability of small text */
+  label,
+  .text-xs {
+    user-select: none;
+    -webkit-user-select: none;
+  }
+}
+
+/* Liquid Glass (Glassmorphism) Effect */
+.liquid-glass {
+  background: rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 1.25rem;
+  box-shadow: 
+    0 12px 40px 0 rgba(0, 0, 0, 0.25),
+    inset 0 1px 1px 0 rgba(255, 255, 255, 0.12);
+  transition: all 400ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.liquid-glass:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(99, 102, 241, 0.35);
+  box-shadow: 
+    0 20px 48px 0 rgba(99, 102, 241, 0.18),
+    inset 0 1px 1px 0 rgba(255, 255, 255, 0.2);
+  transform: translateY(-3px);
 }

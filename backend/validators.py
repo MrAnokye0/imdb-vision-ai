@@ -1,9 +1,16 @@
 """
 Field validators for IMDB data.
+Each validator returns (is_valid, normalized_value, confidence_score).
+Fields whose confidence falls below REVIEW_THRESHOLD are flagged for human review.
 """
 
 import re
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List
+
+# ─── Review threshold ─────────────────────────────────────────────────────────
+
+# Any field with confidence below this value will be included in `needs_review_fields`.
+REVIEW_THRESHOLD = 0.80
 
 # ─── Country Database ──────────────────────────────────────────────────────────
 
@@ -41,16 +48,15 @@ VALID_COUNTRIES = {
     "Tunisia", "Turkey", "Turkmenistan", "Tuvalu", "Uganda", "Ukraine",
     "United Arab Emirates", "United Kingdom", "United States", "Uruguay",
     "Uzbekistan", "Vanuatu", "Vatican City", "Venezuela", "Vietnam", "Yemen",
-    "Zambia", "Zimbabwe"
+    "Zambia", "Zimbabwe",
 }
 
-# ─── Barcode Validators ───────────────────────────────────────────────────────
+# ─── Barcode ──────────────────────────────────────────────────────────────────
 
-BARCODE_PATTERNS = {
+BARCODE_FORMATS = {
     "EAN-13": r"^\d{13}$",
-    "EAN-8": r"^\d{8}$",
-    "UPC-A": r"^\d{12}$",
-    "UPC-E": r"^\d{8}$",
+    "EAN-8":  r"^\d{8}$",
+    "UPC-A":  r"^\d{12}$",
     "EAN-14": r"^\d{14}$",
 }
 
@@ -61,225 +67,185 @@ def validate_barcode(value: str) -> Tuple[bool, Optional[str], float]:
     """
     if not value or not value.strip():
         return False, None, 0.0
-    
     digits = re.sub(r'\D', '', value)
     if not digits:
         return False, None, 0.0
-    
-    for fmt, pattern in BARCODE_PATTERNS.items():
+    for fmt, pattern in BARCODE_FORMATS.items():
         if re.match(pattern, digits):
             return True, fmt, 1.0
-    
-    # Partial match
     if len(digits) >= 8:
-        return True, f"Non-standard ({len(digits)} digits)", 0.6
-    
+        return True, f"Non-standard ({len(digits)} digits)", 0.55
     return False, None, 0.0
 
-# ─── Weight Validators ────────────────────────────────────────────────────────
+# ─── Weight ───────────────────────────────────────────────────────────────────
 
-WEIGHT_REGEX = r"^(\d+(?:\.\d+)?)\s*(g|kg|mg|ml|l|cl|oz|lb)$"
+WEIGHT_REGEX = r"^(\d+(?:\.\d+)?)\s*(g|kg|mg|ml|l|cl|oz|lb|fl\s*oz)$"
 
 def validate_weight(value: str) -> Tuple[bool, str, float]:
     """
-    Validate weight/volume format.
+    Validate weight/volume string.
     Returns: (is_valid, normalized_value, confidence_score)
     """
     if not value or not value.strip():
         return False, "", 0.0
-    
-    # Normalize
-    normalized = value.replace(' ', '').lower()
-    normalized = normalized.replace('kilogram', 'kg').replace('gram', 'g')
-    normalized = normalized.replace('milliliter', 'ml').replace('millilitre', 'ml')
-    normalized = normalized.replace('liter', 'l').replace('litre', 'l')
-    
+    normalized = re.sub(r'\s+', '', value.lower().strip())
+    normalized = (normalized
+                  .replace('kilogram', 'kg').replace('gram', 'g')
+                  .replace('milliliter', 'ml').replace('millilitre', 'ml')
+                  .replace('liter', 'l').replace('litre', 'l')
+                  .replace('ounce', 'oz').replace('pound', 'lb'))
     if re.match(WEIGHT_REGEX, normalized):
         return True, normalized, 1.0
-    
-    # Try to extract value and unit
     match = re.search(r'(\d+(?:\.\d+)?)\s*([a-z]+)', normalized)
     if match:
         return True, f"{match.group(1)}{match.group(2)}", 0.75
-    
-    return False, value, 0.0
+    return False, value.strip(), 0.3
 
-# ─── Country Validators ───────────────────────────────────────────────────────
+# ─── Country ──────────────────────────────────────────────────────────────────
 
-COUNTRY_ALIASES = {
-    "usa": "United States",
-    "us": "United States",
-    "u.s.": "United States",
-    "united states of america": "United States",
-    "uk": "United Kingdom",
-    "great britain": "United Kingdom",
-    "gb": "United Kingdom",
-    "uae": "United Arab Emirates",
-    "drc": "DR Congo",
-    "south korea": "South Korea",
-    "korea": "South Korea",
-    "ivory coast": "Côte d'Ivoire",
+COUNTRY_ALIASES: dict = {
+    "usa":                       "United States",
+    "us":                        "United States",
+    "u.s.":                      "United States",
+    "united states of america":  "United States",
+    "uk":                        "United Kingdom",
+    "great britain":             "United Kingdom",
+    "england":                   "United Kingdom",
+    "scotland":                  "United Kingdom",
+    "wales":                     "United Kingdom",
+    "gb":                        "United Kingdom",
+    "uae":                       "United Arab Emirates",
+    "drc":                       "DR Congo",
+    "south korea":               "South Korea",
+    "korea":                     "South Korea",
+    "republic of korea":         "South Korea",
+    "ivory coast":               "Côte d'Ivoire",
+    "côte d'ivoire":             "Côte d'Ivoire",
+    "republic of ireland":       "Ireland",
+    "holland":                   "Netherlands",
+    "czech republic":            "Czechia",
 }
 
 def validate_country(value: str) -> Tuple[bool, str, float]:
     """
-    Validate country name against database.
+    Validate and normalise country name.
     Returns: (is_valid, normalized_name, confidence_score)
     """
     if not value or not value.strip():
         return False, "", 0.0
-    
     value_lower = value.lower().strip()
-    
-    # Check aliases
+    # Alias table
     if value_lower in COUNTRY_ALIASES:
-        normalized = COUNTRY_ALIASES[value_lower]
-        return True, normalized, 1.0
-    
-    # Check exact match (case-insensitive)
+        return True, COUNTRY_ALIASES[value_lower], 1.0
+    # Exact match
     for country in VALID_COUNTRIES:
         if country.lower() == value_lower:
             return True, country, 1.0
-    
-    # Check partial match
+    # Partial match
     for country in VALID_COUNTRIES:
         if value_lower in country.lower() or country.lower() in value_lower:
-            return True, country, 0.85
-    
-    # Unknown country
-    return False, value.strip(), 0.3
+            return True, country, 0.8
+    # Unknown — return as-is with low confidence
+    return False, value.strip().title(), 0.3
 
-# ─── Packaging Validators ─────────────────────────────────────────────────────
+# ─── Packaging ────────────────────────────────────────────────────────────────
 
-PACKAGING_TYPES = [
-    "Bottle", "Can", "Box", "Bag", "Jar", "Tube", "Tub", "Pack",
-    "Sachet", "Pouch", "Carton", "Tin", "Container", "Tray", "Barrel", "Crate"
+PACKAGING_TYPES: List[str] = [
+    "Bottle", "Can", "Box", "Bag", "Pouch", "Sachet", "Jar", "Tube",
+    "Tub", "Blister", "Pack", "Carton", "Tin", "Container", "Tray",
+    "Barrel", "Crate",
 ]
 
 def validate_packaging(value: str) -> Tuple[bool, str, float]:
-    """
-    Validate packaging type.
-    Returns: (is_valid, normalized_type, confidence_score)
-    """
     if not value or not value.strip():
         return False, "", 0.0
-    
-    # Exact match (case-insensitive)
     for pkg in PACKAGING_TYPES:
         if value.lower() == pkg.lower():
             return True, pkg, 1.0
-    
-    # Partial match
-    value_lower = value.lower()
     for pkg in PACKAGING_TYPES:
-        if value_lower in pkg.lower():
-            return True, pkg, 0.9
-    
-    return False, value.strip(), 0.4
+        if value.lower() in pkg.lower() or pkg.lower() in value.lower():
+            return True, pkg, 0.85
+    return False, value.strip().title(), 0.4
 
-# ─── Brand Validators ─────────────────────────────────────────────────────────
+# ─── Brand ────────────────────────────────────────────────────────────────────
 
 def validate_brand(value: str) -> Tuple[bool, str, float]:
-    """
-    Validate brand name format.
-    Returns: (is_valid, value, confidence_score)
-    """
     if not value or not value.strip():
         return False, "", 0.0
-    
     value = value.strip()
-    length = len(value)
-    
-    # Valid brands are 2-60 chars
-    if length < 2 or length > 60:
+    if len(value) < 2 or len(value) > 60:
         return False, value, 0.3
-
     cleaned = re.sub(r"[^A-Za-z0-9 '&\-]", '', value)
     noise_ratio = len(cleaned) / max(1, len(value))
     if noise_ratio < 0.75:
         return True, value, 0.5
-
     if re.search(r'[~^_+=/\\|@#\$%&*]', value):
         return True, value, 0.5
-    
     return True, value, 0.9
 
-# ─── Product Name Validators ───────────────────────────────────────────────────
+# ─── Product Name ─────────────────────────────────────────────────────────────
 
 def validate_product_name(value: str) -> Tuple[bool, str, float]:
-    """
-    Validate product name format.
-    Returns: (is_valid, value, confidence_score)
-    """
     if not value or not value.strip():
         return False, "", 0.0
-    
     value = value.strip()
-    length = len(value)
-    
-    # Valid names are 3-200 chars
-    if length < 3 or length > 200:
+    if len(value) < 3 or len(value) > 200:
         return False, value, 0.3
-    
     return True, value, 0.88
 
-# ─── Manufacturer Validators ───────────────────────────────────────────────────
+# ─── Manufacturer ─────────────────────────────────────────────────────────────
 
 def validate_manufacturer(value: str) -> Tuple[bool, str, float]:
-    """
-    Validate manufacturer name.
-    Returns: (is_valid, value, confidence_score)
-    """
     if not value or not value.strip():
         return False, "", 0.0
-    
     value = value.strip()
     if len(value) < 2:
         return False, value, 0.2
-    
     return True, value, 0.78
 
-# ─── Category Validators ───────────────────────────────────────────────────────
+# ─── Category ─────────────────────────────────────────────────────────────────
 
-VALID_CATEGORIES = [
+VALID_CATEGORIES: List[str] = [
     "Beverages", "Snacks", "Dairy", "Personal Care", "Oral Care",
-    "Household", "Grocery", "Bakery", "Healthcare", "Confectionery"
+    "Household", "Grocery", "Bakery", "Healthcare", "Confectionery",
+    "Baby Products", "Pet Care",
 ]
 
 def validate_category(value: str) -> Tuple[bool, str, float]:
-    """
-    Validate category type.
-    Returns: (is_valid, normalized_type, confidence_score)
-    """
     if not value or not value.strip():
         return False, "", 0.0
-    
     for cat in VALID_CATEGORIES:
         if value.lower() == cat.lower():
             return True, cat, 0.95
-    
-    return False, value.strip(), 0.3
+    return False, value.strip().title(), 0.4
 
-# ─── Segment Validators ────────────────────────────────────────────────────────
+# ─── Segment ──────────────────────────────────────────────────────────────────
 
 def validate_segment(value: str) -> Tuple[bool, str, float]:
-    """
-    Validate segment type.
-    Returns: (is_valid, value, confidence_score)
-    """
     if not value or not value.strip():
         return False, "", 0.0
-    
     return True, value.strip(), 0.8
 
-# ─── Marketing Message Validators ──────────────────────────────────────────────
+# ─── Marketing Message ────────────────────────────────────────────────────────
 
 def validate_marketing_message(value: str) -> Tuple[bool, str, float]:
-    """
-    Validate marketing message.
-    Returns: (is_valid, value, confidence_score)
-    """
     if not value or not value.strip():
         return False, "", 0.0
-    
-    return True, value.strip(), 0.75
+    value = value.strip()
+    # Length sanity: marketing messages should be short phrases
+    if len(value) > 120:
+        return True, value[:120], 0.6
+    return True, value, 0.75
+
+# ─── Review flagging ──────────────────────────────────────────────────────────
+
+def get_needs_review_fields(field_confidences: dict) -> List[str]:
+    """
+    Return a list of field names whose confidence is below REVIEW_THRESHOLD
+    or whose value is empty (confidence == 0).
+    """
+    return [
+        field
+        for field, conf in field_confidences.items()
+        if conf < REVIEW_THRESHOLD
+    ]

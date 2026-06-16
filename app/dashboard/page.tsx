@@ -140,15 +140,15 @@ export default function DashboardPage() {
         <div className="flex gap-2 flex-wrap">
           {products.length > 0 && (
             <>
-              <button onClick={() => exportCSV(products)}
-                className="text-sm bg-emerald-600 text-white font-semibold px-4 py-2.5 rounded-xl hover:bg-emerald-700 transition-colors">
-                ⬇ Export All CSV
-              </button>
               <button
                 onClick={async () => { setExportingXlsx(true); await exportExcel(products); setExportingXlsx(false); }}
                 disabled={exportingXlsx}
-                className="text-sm bg-blue-600 text-white font-semibold px-4 py-2.5 rounded-xl hover:bg-blue-700 disabled:opacity-50 transition-colors">
-                {exportingXlsx ? "⏳ Building…" : "⬇ Export All Excel"}
+                className="text-sm bg-indigo-600 text-white font-bold px-4 py-2.5 rounded-xl hover:bg-indigo-700 active:scale-95 transition-all shadow-sm">
+                {exportingXlsx ? "⏳ Building Excel…" : "📊 Export Styled Excel"}
+              </button>
+              <button onClick={() => exportCSV(products)}
+                className="text-sm bg-white text-slate-600 border border-slate-200 font-semibold px-4 py-2.5 rounded-xl hover:bg-slate-50 transition-colors">
+                📄 Export Raw CSV (Database)
               </button>
             </>
           )}
@@ -274,13 +274,13 @@ export default function DashboardPage() {
                             className="text-xs bg-blue-100 text-blue-700 hover:bg-blue-200 px-3 py-1.5 rounded-lg font-medium transition-colors">
                             ✏️ Edit
                           </button>
-                          <button onClick={() => exportCSV([p])}
-                            className="text-xs bg-emerald-100 text-emerald-700 hover:bg-emerald-200 px-3 py-1.5 rounded-lg font-medium transition-colors">
-                            ⬇ CSV
-                          </button>
                           <button onClick={async () => exportExcel([p])}
-                            className="text-xs bg-blue-600 text-white hover:bg-blue-700 px-3 py-1.5 rounded-lg font-medium transition-colors">
-                            ⬇ Excel
+                            className="text-xs bg-indigo-50 text-indigo-700 hover:bg-indigo-100 px-3 py-1.5 rounded-lg font-bold transition-colors">
+                            📊 Excel
+                          </button>
+                          <button onClick={() => exportCSV([p])}
+                            className="text-xs bg-white text-slate-500 border border-slate-200 hover:bg-slate-50 px-3 py-1.5 rounded-lg font-medium transition-colors">
+                            📄 CSV (Raw)
                           </button>
                           <button onClick={() => handleDelete(p.id)}
                             className="text-xs bg-red-100 text-red-600 hover:bg-red-200 px-3 py-1.5 rounded-lg font-medium transition-colors">

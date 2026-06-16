@@ -152,12 +152,118 @@ export async function preprocessImage(
 }
 
 /**
- * Convert a preprocessed blob URL to a base64 string for API calls.
+ * Convert a blob URL to base64.
+ * Uses FileReader which handles large files without the btoa stack-overflow problem.
  */
 export async function urlToBase64(url: string): Promise<{ base64: string; mimeType: string }> {
-  const res    = await fetch(url);
-  const blob   = await res.blob();
-  const buffer = await blob.arrayBuffer();
-  const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
-  return { base64, mimeType: blob.type || "image/jpeg" };
+  const res  = await fetch(url);
+  const blob = await res.blob();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload  = () => {
+      const dataUrl = reader.result as string;
+      const comma   = dataUrl.indexOf(",");
+      const base64  = comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl;
+      resolve({ base64, mimeType: blob.type || "image/jpeg" });
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+/**
+ * Barcode-specific preprocessing: enhance contrast, convert to B&W, optimize for scanner.
+ * This produces high-contrast black & white images ideal for barcode detection.
+ */
+export async function preprocessImageForBarcode(
+  inputUrl: string,
+  maxDim = 1600
+): Promise<{ url: string; width: number; height: number }> {
+  const img = await loadImage(inputUrl);
+  const originalWidth = img.naturalWidth;
+  const originalHeight = img.naturalHeight;
+
+  // Resize to larger size for barcode clarity
+  const scale = Math.min(1, maxDim / Math.max(originalWidth, originalHeight));
+  const width = Math.round(originalWidth * scale);
+  const height = Math.round(originalHeight * scale);
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+
+  const ctx = canvas.getContext("2d")!;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(img, 0, 0, width, height);
+
+  // Get image data
+  const imageData = ctx.getImageData(0, 0, width, height);
+  const data = imageData.data;
+
+  // Convert to grayscale and apply high contrast for barcode detection
+  const contrastFactor = 2.0; // Aggressive contrast for barcodes
+  const brightnessOffset = 5;
+  const threshold = 128; // Adaptive threshold
+
+  // First pass: enhance contrast in grayscale
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+    
+    // Convert to grayscale
+    const gray = 0.299 * r + 0.587 * g + 0.114 * b;
+    
+    // Enhance contrast
+    const enhanced = Math.min(255, Math.max(0, (gray - 128) * contrastFactor + 128 + brightnessOffset));
+    
+    // Apply threshold to create sharp B&W
+    const bw = enhanced > threshold ? 255 : 0;
+
+    data[i] = bw;
+    data[i + 1] = bw;
+    data[i + 2] = bw;
+    // alpha stays unchanged
+  }
+
+  // Apply sharpening for barcode edges
+  const temp = new Uint8ClampedArray(data);
+  const kernel = [-1, -1, -1, -1, 9, -1, -1, -1, -1]; // Sharpen kernel
+  
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      for (let c = 0; c < 3; c++) {
+        let sum = 0;
+        let k = 0;
+        for (let ky = -1; ky <= 1; ky++) {
+          for (let kx = -1; kx <= 1; kx++) {
+            sum += temp[((y + ky) * width + (x + kx)) * 4 + c] * kernel[k++];
+          }
+        }
+        const idx = (y * width + x) * 4 + c;
+        data[idx] = Math.min(255, Math.max(0, sum));
+      }
+    }
+  }
+
+  ctx.putImageData(imageData, 0, 0);
+
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) {
+          reject(new Error("Canvas toBlob failed"));
+          return;
+        }
+        resolve({
+          url: URL.createObjectURL(blob),
+          width,
+          height,
+        });
+      },
+      "image/jpeg",
+      0.98 // Very high quality for barcode detection
+    );
+  });
 }

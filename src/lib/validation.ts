@@ -161,7 +161,7 @@ export function normalizeCategory(raw: string): string {
 const PACKAGING_MAP: Record<string, string> = {
   bottle: "Bottle", bottles: "Bottle",
   can: "Can", cans: "Can", tin: "Can",
-  box: "Box", boxes: "Box", carton: "Carton", cardboard: "Box",
+  box: "Carton", boxes: "Carton", carton: "Carton", cardboard: "Carton",
   bag: "Bag", bags: "Bag", sachet: "Sachet",
   pouch: "Pouch", pouches: "Pouch",
   jar: "Jar", jars: "Jar",
