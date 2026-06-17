@@ -140,21 +140,36 @@ export async function extractFromImages(
   console.log("BARCODE:", barcode || "(none)");
   upd("barcode", barcode ? "done" : "skipped", barcode ? `✓ ${barcode}` : "No barcode");
 
-  // ── 3. OCR all images in parallel ─────────────────────────────────────────
-  upd("ocr", "running", "🔤 Running OCR…");
+  // ── 3. OCR all images in parallel + Firebase/OFF lookup — ALL CONCURRENT ──
+  // Start Firebase lookup immediately (even without barcode result yet)
+  // so the Firestore connection warms up during OCR processing.
+  upd("ocr",      "running", "🔤 Running OCR…");
+  upd("firebase", "running", "🔥 Checking Firebase…");
+  upd("off",      "running", "🌍 Open Food Facts…");
+
   const t2 = performance.now();
 
-  const ocrResults = await Promise.all(
-    perImage.map(async (p) => {
-      try {
-        const dataUrl = await toDataUrl(p.resized);
-        const result  = await runOCR(dataUrl);
-        return { result, label: p.label };
-      } catch {
-        return { result: { text: "", words: [] }, label: p.label };
-      }
-    })
-  );
+  // Run OCR, Firebase, and OFF all at the same time
+  const [ocrResults, apiProduct, apiOffProduct] = await Promise.all([
+    // OCR — all images parallel, 6s per-image timeout
+    Promise.all(
+      perImage.map(async (p) => {
+        try {
+          const dataUrl = await toDataUrl(p.resized);
+          const result  = await Promise.race([
+            runOCR(dataUrl),
+            new Promise<never>((_, rej) => setTimeout(() => rej(new Error("ocr timeout")), 6000)),
+          ]);
+          return { result, label: p.label };
+        } catch {
+          return { result: { text: "", words: [] }, label: p.label };
+        }
+      })
+    ),
+    // Firebase — barcode lookup (or null if no barcode yet — we'll retry below)
+    barcode ? findByBarcode(barcode).catch(() => null) : Promise.resolve(null),
+    barcode ? lookupBarcode(barcode).catch(() => null)  : Promise.resolve(null),
+  ]);
 
   const combinedText = ocrResults.map((r) => r.result.text ?? "").filter(Boolean).join("\n\n");
   const ocrMs = Math.round(performance.now() - t2);
@@ -175,15 +190,7 @@ export async function extractFromImages(
   upd("engine", engineFields > 0 ? "done" : "skipped",
     `✓ ${engineFields}/10 fields · ${engineMs}ms`);
 
-  // ── 5. Firebase + OFF — only if barcode found (fast parallel lookup) ──────
-  upd("firebase", "running", barcode ? `🔥 Firebase: ${barcode}` : "🔥 Skipping");
-  upd("off",      "running", barcode ? "🌍 Open Food Facts…"      : "🌍 Skipping");
-
-  const [apiProduct, apiOffProduct] = await Promise.all([
-    barcode ? findByBarcode(barcode).catch(() => null) : Promise.resolve(null),
-    barcode ? lookupBarcode(barcode).catch(() => null)  : Promise.resolve(null),
-  ]);
-
+  // ── 5. Log Firebase + OFF results ────────────────────────────────────────
   log("FIREBASE",        apiProduct    ? "ok" : "empty", apiProduct    ?? "(not found)");
   log("OPEN_FOOD_FACTS", apiOffProduct ? "ok" : "empty", apiOffProduct ?? "(not found)");
   upd("firebase", apiProduct    ? "done" : "skipped", apiProduct    ? `✓ ${apiProduct.productName ?? barcode}` : "Not in cache");
