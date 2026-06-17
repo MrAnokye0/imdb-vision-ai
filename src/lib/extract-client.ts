@@ -5,7 +5,7 @@ import { lookupBarcode } from "@/src/lib/barcode-lookup";
 import { findByBarcode } from "@/src/lib/firestore";
 import { urlToBase64 } from "@/src/lib/image-preprocess";
 import { runOCR } from "@/src/lib/ocr";
-import { runProductIntelligenceEngine, toProductRecord } from "@/src/lib/product-intelligence-engine";
+import { runProductIntelligenceEngine } from "@/src/lib/product-intelligence-engine";
 import { normalizeProduct, generateValidationReport } from "@/src/lib/validation";
 import type { ProductRecord, ExtractionSource, PipelineStep } from "@/src/types/product";
 import type { ValidationReport } from "@/src/lib/validation";
@@ -14,7 +14,7 @@ const DEV = process.env.NODE_ENV === "development";
 
 // ─── Debug logger ─────────────────────────────────────────────────────────────
 
-type DebugStage = "BARCODE" | "OCR" | "ENGINE" | "FIREBASE" | "OPEN_FOOD_FACTS" | "BACKEND" | "MERGE" | "VALIDATE";
+type DebugStage = "BARCODE" | "OCR" | "ENGINE" | "FIREBASE" | "OPEN_FOOD_FACTS" | "MERGE" | "VALIDATE";
 
 interface DebugEntry {
   stage: DebugStage;
@@ -50,35 +50,33 @@ export interface ExtractionResult {
   timingMs?: number;
 }
 
-// ─── Fast canvas resize ───────────────────────────────────────────────────────
+// ─── Canvas resize ────────────────────────────────────────────────────────────
 
 async function fastResize(url: string, maxDim = 800): Promise<string> {
   try {
     const img = await new Promise<HTMLImageElement>((res, rej) => {
       const el = new window.Image();
-      el.onload  = () => res(el);
+      el.onload = () => res(el);
       el.onerror = rej;
       el.src = url;
     });
-    const scale  = Math.min(1, maxDim / Math.max(img.naturalWidth, img.naturalHeight));
-    const w      = Math.round(img.naturalWidth  * scale);
-    const h      = Math.round(img.naturalHeight * scale);
+    const scale = Math.min(1, maxDim / Math.max(img.naturalWidth, img.naturalHeight));
+    const w = Math.round(img.naturalWidth * scale);
+    const h = Math.round(img.naturalHeight * scale);
     const canvas = document.createElement("canvas");
     canvas.width = w; canvas.height = h;
-    const ctx    = canvas.getContext("2d")!;
+    const ctx = canvas.getContext("2d")!;
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
     ctx.drawImage(img, 0, 0, w, h);
     return await new Promise<string>((res, rej) =>
       canvas.toBlob(
         (b) => (b ? res(URL.createObjectURL(b)) : rej(new Error("toBlob failed"))),
-        "image/jpeg", 0.80
+        "image/jpeg", 0.82
       )
     );
   } catch { return url; }
 }
-
-// ─── blob URL → data URL for Tesseract ───────────────────────────────────────
 
 async function toDataUrl(blobUrl: string): Promise<string> {
   try {
@@ -98,13 +96,13 @@ export async function extractFromImages(
   const t0 = performance.now();
 
   const steps: PipelineStep[] = [
-    { id: "barcode",  label: "Barcode Detection",     status: "pending" },
-    { id: "ocr",      label: "OCR Extraction",        status: "pending" },
-    { id: "engine",   label: "Product Intelligence",  status: "pending" },
-    { id: "firebase", label: "Firebase Cache",        status: "pending" },
-    { id: "off",      label: "Open Food Facts",       status: "pending" },
-    { id: "merge",    label: "Merge & Prioritise",    status: "pending" },
-    { id: "validate", label: "Validation & Scoring",  status: "pending" },
+    { id: "barcode",  label: "Barcode Detection",    status: "pending" },
+    { id: "ocr",      label: "OCR Extraction",       status: "pending" },
+    { id: "engine",   label: "Product Intelligence", status: "pending" },
+    { id: "firebase", label: "Firebase Cache",       status: "pending" },
+    { id: "off",      label: "Open Food Facts",      status: "pending" },
+    { id: "merge",    label: "Merge & Prioritise",   status: "pending" },
+    { id: "validate", label: "Validation & Scoring", status: "pending" },
   ];
 
   const upd = (id: string, status: PipelineStep["status"], detail?: string) => {
@@ -113,85 +111,77 @@ export async function extractFromImages(
     onProgress?.(detail ?? id, [...steps]);
   };
 
-  // ── 1. Resize all images ──────────────────────────────────────────────────
+  // ── 1. Resize ─────────────────────────────────────────────────────────────
   const perImage = await Promise.all(
     imageUrls.map(async (url, i) => ({
-      url,
+      url, label: imageLabels?.[i] ?? "Other",
       resized: await fastResize(url, 800),
-      label:   imageLabels?.[i] ?? "Other",
     }))
   );
   const resizedUrls = perImage.map((p) => p.resized);
 
-  // ── 2. All heavy work runs CONCURRENTLY ───────────────────────────────────
-  upd("barcode",  "running", "📊 Scanning barcodes…");
-  upd("ocr",      "running", "🔤 Running OCR…");
-  upd("engine",   "running", "🧠 Product Intelligence…");
-  upd("firebase", "running", "🔥 Checking Firebase…");
-  upd("off",      "running", "🌍 Open Food Facts…");
-
+  // ── 2. ZXing barcode — ALL images race, 2s total ──────────────────────────
+  upd("barcode", "running", "📊 Scanning barcodes…");
   const t1 = performance.now();
 
-  const [barcodeResult, ocrResults, backendResult] = await Promise.all([
-    // ZXing — race ALL images simultaneously, 2s total timeout
-    (async () => {
-      try {
-        const reader = new BrowserMultiFormatReader();
-        const result = await Promise.race([
-          // Try all images in parallel — first barcode wins
-          Promise.any(
-            perImage.map((p) => reader.decodeFromImageUrl(p.resized).then((r) => ({ label: p.label, barcode: r.getText() })))
-          ),
-          new Promise<never>((_, rej) => setTimeout(() => rej(new Error("timeout")), 2000)),
-        ]);
-        return perImage.map((p) => ({ ...p, barcode: result.label === p.label ? result.barcode : undefined }));
-      } catch {
-        return perImage.map((p) => ({ ...p, barcode: undefined }));
-      }
-    })(),
-    // Tesseract OCR on all images (data URL conversion avoids blob expiry)
-    Promise.all(
-      perImage.map(async (p) => {
-        try {
-          const dataUrl = await toDataUrl(p.resized);
-          const result  = await runOCR(dataUrl);
-          return { result, label: p.label };
-        } catch {
-          return { result: { text: "", words: [] }, label: p.label };
-        }
-      })
-    ),
-    // Backend (Rekognition + PaddleOCR) — 8s hard timeout
-    fetchBackendWithTimeout(resizedUrls, imageLabels ?? [], 8000),
-  ]);
+  let barcode = "";
+  try {
+    const reader = new BrowserMultiFormatReader();
+    const result = await Promise.race([
+      Promise.any(perImage.map((p) =>
+        reader.decodeFromImageUrl(p.resized).then((r) => r.getText())
+      )),
+      new Promise<never>((_, rej) => setTimeout(() => rej(new Error("timeout")), 2000)),
+    ]);
+    barcode = result;
+  } catch { /* no barcode — continue */ }
 
-  const elapsed = Math.round(performance.now() - t1);
-
-  // Barcode — take the first found across all images
-  const barcodeFound = barcodeResult.find((p) => p.barcode);
-  const barcode = barcodeFound?.barcode ?? "";
-
-  log("BARCODE", barcode ? "ok" : "empty", { barcode }, elapsed);
+  log("BARCODE", barcode ? "ok" : "empty", { barcode }, Math.round(performance.now() - t1));
   console.log("BARCODE:", barcode || "(none)");
   upd("barcode", barcode ? "done" : "skipped", barcode ? `✓ ${barcode}` : "No barcode");
 
-  // OCR
+  // ── 3. OCR all images in parallel ─────────────────────────────────────────
+  upd("ocr", "running", "🔤 Running OCR…");
+  const t2 = performance.now();
+
+  const ocrResults = await Promise.all(
+    perImage.map(async (p) => {
+      try {
+        const dataUrl = await toDataUrl(p.resized);
+        const result  = await runOCR(dataUrl);
+        return { result, label: p.label };
+      } catch {
+        return { result: { text: "", words: [] }, label: p.label };
+      }
+    })
+  );
+
   const combinedText = ocrResults.map((r) => r.result.text ?? "").filter(Boolean).join("\n\n");
+  const ocrMs = Math.round(performance.now() - t2);
   log("OCR", combinedText.trim() ? "ok" : "empty",
-    { chars: combinedText.length, preview: combinedText.slice(0, 150) }, elapsed);
-  console.log("OCR TEXT:", combinedText.slice(0, 300) || "(empty)");
+    { chars: combinedText.length, preview: combinedText.slice(0, 200) }, ocrMs);
+  console.log("OCR TEXT:", combinedText.slice(0, 400) || "(empty)");
   upd("ocr", combinedText.trim() ? "done" : "skipped",
-    combinedText.trim() ? `✓ ${combinedText.length} chars` : "No text extracted");
+    combinedText.trim() ? `✓ ${combinedText.length} chars · ${ocrMs}ms` : "No text");
 
-  // Backend
-  log("BACKEND", backendResult ? "ok" : "empty", backendResult ?? "(timeout/unavailable)", elapsed);
-  upd("engine", backendResult ? "done" : "skipped",
-    backendResult ? `✓ Backend fields · ${elapsed}ms` : `OCR fallback · ${elapsed}ms`);
+  // ── 4. Product Intelligence Engine (instant — no network call) ────────────
+  upd("engine", "running", "🧠 Product Intelligence Engine…");
+  const t3 = performance.now();
+  const engineOutput = runProductIntelligenceEngine(ocrResults, barcode);
+  const engineMs = Math.round(performance.now() - t3);
+  const engineFields = Object.values(engineOutput).filter((f) => f.value.trim()).length;
+  log("ENGINE", engineFields > 0 ? "ok" : "empty", engineOutput, engineMs);
+  console.log("ENGINE:", engineOutput);
+  upd("engine", engineFields > 0 ? "done" : "skipped",
+    `✓ ${engineFields}/10 fields · ${engineMs}ms`);
 
-  // Firebase + OFF (share the same concurrent window)
+  // ── 5. Firebase + OFF — only if barcode found (fast parallel lookup) ──────
+  upd("firebase", "running", barcode ? `🔥 Firebase: ${barcode}` : "🔥 Skipping");
+  upd("off",      "running", barcode ? "🌍 Open Food Facts…"      : "🌍 Skipping");
+
   const [apiProduct, apiOffProduct] = await Promise.all([
     barcode ? findByBarcode(barcode).catch(() => null) : Promise.resolve(null),
-    barcode ? lookupBarcode(barcode).catch(() => null) : Promise.resolve(null),
+    barcode ? lookupBarcode(barcode).catch(() => null)  : Promise.resolve(null),
   ]);
 
   log("FIREBASE",        apiProduct    ? "ok" : "empty", apiProduct    ?? "(not found)");
@@ -199,14 +189,7 @@ export async function extractFromImages(
   upd("firebase", apiProduct    ? "done" : "skipped", apiProduct    ? `✓ ${apiProduct.productName ?? barcode}` : "Not in cache");
   upd("off",      apiOffProduct ? "done" : "skipped", apiOffProduct ? `✓ ${apiOffProduct.productName ?? barcode}` : "Not found");
 
-  // ── 3. Client-side Product Intelligence Engine (always runs) ─────────────
-  // This is instant (~5ms) and ensures fields are populated even when
-  // backend + Firebase + OFF all miss.
-  upd("engine", "running", "🧠 Product Intelligence Engine…");
-  const engineOutput = runProductIntelligenceEngine(ocrResults, barcode);
-  upd("engine", "done", `✓ Engine complete`);
-
-  // ── 4. Merge — priority: Firebase > OFF > Backend > Engine ───────────────
+  // ── 6. Merge — priority: Firebase > OFF > Engine ─────────────────────────
   upd("merge", "running", "🔧 Merging…");
 
   type ProductField = keyof ProductRecord;
@@ -226,16 +209,11 @@ export async function extractFromImages(
     candidates[field].push({ value: v, score: Math.min(1, score), source });
   };
 
+  // Authoritative cache hits first
   if (apiProduct)    for (const k of FIELDS) { const v = apiProduct[k];    if (typeof v === "string" && v.trim()) add(k, v, 1.20, "firebase");      }
   if (apiOffProduct) for (const k of FIELDS) { const v = apiOffProduct[k]; if (typeof v === "string" && v.trim()) add(k, v, 1.10, "openfoodfacts"); }
-  if (backendResult) for (const k of FIELDS) {
-    const v = (backendResult as Record<string, unknown>)[k];
-    if (typeof v === "string" && v.trim()) {
-      const conf = (backendResult as Record<string, unknown>).fieldConfidenceScores as Record<string, number> | undefined;
-      add(k, v, conf?.[k] ?? 0.85, "backend");
-    }
-  }
-  // Engine is the fallback — always adds candidates for empty fields
+
+  // Engine (always populated from OCR)
   for (const k of FIELDS) {
     const ef = engineOutput[k as keyof typeof engineOutput];
     if (ef?.value?.trim()) add(k, ef.value, ef.confidence, ef.source);
@@ -252,6 +230,7 @@ export async function extractFromImages(
     fieldConfidenceScores[k] = Math.min(1, list[0].score);
   }
 
+  // ZXing barcode always wins
   if (barcode) { merged.barcode = barcode; fieldConfidenceScores.barcode = 1.0; }
 
   const raw: ProductRecord = {
@@ -274,7 +253,7 @@ export async function extractFromImages(
   log("MERGE", "ok", { merged, fieldConfidenceScores }, Math.round(performance.now() - t0));
   console.log("MERGED RECORD:", raw);
 
-  // ── 5. Validate ───────────────────────────────────────────────────────────
+  // ── 7. Validate ───────────────────────────────────────────────────────────
   upd("merge",    "done",    "✅ Merged");
   upd("validate", "running", "✅ Validating…");
 
@@ -292,18 +271,17 @@ export async function extractFromImages(
   log("VALIDATE", "ok", { overall: validation.overall, completeness: validation.completeness }, timingMs);
   console.log("VALIDATION RESULT:", { overall: validation.overall, completeness: validation.completeness });
 
-  const filledCount = FIELDS.filter((k) => merged[k]).length;
-  if (filledCount === 0) {
-    console.error("❌  All IMDB fields empty. OCR text length:", combinedText.length);
+  if (FIELDS.filter((k) => merged[k]).length === 0) {
+    console.error("❌ All fields empty. OCR chars:", combinedText.length, "Engine fields:", engineFields);
   }
 
   const source: ExtractionSource = apiProduct
     ? "firebase"
     : apiOffProduct
       ? "openfoodfacts"
-      : filledCount > 0 ? "ai" : "ocr";
+      : engineFields > 0 ? "ai" : "ocr";
 
-  upd("validate", "done", `✓ ${Math.round(validation.overall * 100)}% confidence · ${timingMs}ms`);
+  upd("validate", "done", `✓ ${Math.round(validation.overall * 100)}% · ${timingMs}ms`);
 
   return {
     product, source,
@@ -315,7 +293,7 @@ export async function extractFromImages(
   };
 }
 
-// ─── ZXing — 2s hard timeout ──────────────────────────────────────────────────
+// ─── ZXing (exported for test pages) ─────────────────────────────────────────
 
 export async function readBarcode(imageUrl: string): Promise<string> {
   try {
@@ -326,39 +304,6 @@ export async function readBarcode(imageUrl: string): Promise<string> {
     ]);
     return result.getText();
   } catch { return ""; }
-}
-
-// ─── Backend call — configurable hard timeout ─────────────────────────────────
-
-async function fetchBackendWithTimeout(
-  imageUrls: string[],
-  imageLabels: string[],
-  timeoutMs: number
-): Promise<Record<string, unknown> | null> {
-  const controller = new AbortController();
-  const timer      = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const images = await Promise.all(
-      imageUrls.map(async (url) => {
-        try { return (await urlToBase64(url)).base64; }
-        catch { return ""; }
-      })
-    );
-    const resp = await fetch("/api/ai-extract", {
-      method:  "POST",
-      headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ ocrText: "", images, imageLabels }),
-      signal:  controller.signal,
-    });
-    if (!resp.ok) return null;
-    const data = await resp.json();
-    if (!data?.ok || typeof data.payload !== "object") return null;
-    return data.payload as Record<string, unknown>;
-  } catch {
-    return null; // timeout or network error — silently return null
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 // ─── Single-image wrapper ─────────────────────────────────────────────────────
