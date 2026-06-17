@@ -124,9 +124,6 @@ export async function extractFromImages(
   const resizedUrls = perImage.map((p) => p.resized);
 
   // ── 2. All heavy work runs CONCURRENTLY ───────────────────────────────────
-  // ZXing + OCR + Firebase + OFF + Backend all start at the same time.
-  // Total time = slowest single task, not sum of all tasks.
-
   upd("barcode",  "running", "📊 Scanning barcodes…");
   upd("ocr",      "running", "🔤 Running OCR…");
   upd("engine",   "running", "🧠 Product Intelligence…");
@@ -136,13 +133,22 @@ export async function extractFromImages(
   const t1 = performance.now();
 
   const [barcodeResult, ocrResults, backendResult] = await Promise.all([
-    // ZXing — 2s timeout per image
-    Promise.all(
-      perImage.map(async (p) => {
-        const bc = await readBarcode(p.resized).catch(() => "");
-        return { ...p, barcode: bc || undefined };
-      })
-    ),
+    // ZXing — race ALL images simultaneously, 2s total timeout
+    (async () => {
+      try {
+        const reader = new BrowserMultiFormatReader();
+        const result = await Promise.race([
+          // Try all images in parallel — first barcode wins
+          Promise.any(
+            perImage.map((p) => reader.decodeFromImageUrl(p.resized).then((r) => ({ label: p.label, barcode: r.getText() })))
+          ),
+          new Promise<never>((_, rej) => setTimeout(() => rej(new Error("timeout")), 2000)),
+        ]);
+        return perImage.map((p) => ({ ...p, barcode: result.label === p.label ? result.barcode : undefined }));
+      } catch {
+        return perImage.map((p) => ({ ...p, barcode: undefined }));
+      }
+    })(),
     // Tesseract OCR on all images (data URL conversion avoids blob expiry)
     Promise.all(
       perImage.map(async (p) => {
@@ -161,12 +167,9 @@ export async function extractFromImages(
 
   const elapsed = Math.round(performance.now() - t1);
 
-  // Barcode
-  const barcodeIdx = barcodeResult.findIndex((p) => p.label === "Barcode");
-  const barcodeList = barcodeIdx >= 0
-    ? [barcodeResult[barcodeIdx].barcode, ...barcodeResult.map((p) => p.barcode)]
-    : barcodeResult.map((p) => p.barcode);
-  const barcode = barcodeList.find(Boolean) ?? "";
+  // Barcode — take the first found across all images
+  const barcodeFound = barcodeResult.find((p) => p.barcode);
+  const barcode = barcodeFound?.barcode ?? "";
 
   log("BARCODE", barcode ? "ok" : "empty", { barcode }, elapsed);
   console.log("BARCODE:", barcode || "(none)");

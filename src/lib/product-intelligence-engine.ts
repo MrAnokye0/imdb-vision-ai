@@ -355,13 +355,19 @@ function extractBrand(ocr: OCRResult, imageLabel?: string): FieldResult {
     }
   }
 
-  // Fallback: first non-reject line from the OCR text
+  // Fallback: scan cleaned text lines for short capitalised brand-like line
   const lines = (ocr.text ?? "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   for (const line of lines) {
-    if (!isRejectLine(line) && line.length >= 2 && line.length <= 50) {
-      return { value: line, confidence: 0.55, source: "ocr_first_line" };
+    if (isRejectLine(line)) continue;
+    if (line.length < 2 || line.length > 40) continue;
+    if (/^\d/.test(line)) continue;
+    // Accept any line that starts with a capital and has mostly letters
+    const alpha = (line.match(/[a-zA-Z]/g) ?? []).length;
+    if (/^[A-Z]/.test(line) && alpha / line.length > 0.6) {
+      return { value: line, confidence: 0.60, source: "ocr_text_line" };
     }
   }
+
   return { value: "", confidence: 0, source: "none" };
 }
 
@@ -413,12 +419,47 @@ function mergeOCRTexts(
     if (label === "Back"   && !back)  back  = result;
   }
 
+  // Clean each image's OCR text before merging
   const combined = ocrResults
-    .map(({ result }) => result.text ?? "")
+    .map(({ result }) => cleanOcrText(result.text ?? ""))
     .filter(Boolean)
     .join("\n\n");
 
+  // Also clean individual OCR results for front/back
+  if (front) front = { ...front, text: cleanOcrText(front.text ?? "") };
+  if (back)  back  = { ...back,  text: cleanOcrText(back.text ?? "") };
+
   return { combined, front, back };
+}
+
+// ─── OCR text cleaner ─────────────────────────────────────────────────────────
+// Tesseract produces noisy output with symbols, pipe chars, and garbled words.
+// This pass strips symbols, normalises spacing, and extracts only meaningful lines.
+
+function cleanOcrText(raw: string): string {
+  if (!raw) return "";
+
+  const lines = raw.split(/\r?\n/);
+  const cleaned: string[] = [];
+
+  for (const line of lines) {
+    // Remove obvious noise characters but keep letters, digits, spaces, common punctuation
+    let l = line
+      .replace(/[|\\{}\[\]<>*^~`#$@%]/g, " ")  // strip pipe, brackets, symbols
+      .replace(/\s{2,}/g, " ")                   // collapse whitespace
+      .trim();
+
+    // Skip lines that are mostly noise (< 40% alphabetic characters)
+    const alpha = (l.match(/[a-zA-Z]/g) ?? []).length;
+    if (l.length > 2 && alpha / l.length < 0.3) continue;
+
+    // Skip very short fragments
+    if (l.length < 2) continue;
+
+    cleaned.push(l);
+  }
+
+  return cleaned.join("\n");
 }
 
 // ─── Main entry point ─────────────────────────────────────────────────────────
